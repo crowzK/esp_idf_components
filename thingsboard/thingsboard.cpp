@@ -430,7 +430,8 @@ std::string ThingsBoard::provision(const std::string& deviceName, const std::str
         });
     if(success)
     {
-        const char* buff = "{'provisionDeviceKey': 'tnq5nvcloyfr80awwr93', 'provisionDeviceSecret': '1q6fed37nr963nuik3r2', 'deviceName': 'F0:F5:BD:75:C7:D8'}";
+        char buff[300];
+        snprintf(buff, sizeof(buff), "{'provisionDeviceKey': '%s', 'provisionDeviceSecret': '%s', 'deviceName': '%s'}", devKey.c_str(), devSec.c_str(), deviceName.c_str());
         ESP_LOGI(TAG, "%s", buff);
         publish("/provision/request", buff);
         bool result = cv.wait_for(uk, std::chrono::seconds(4), [&rcv]{return rcv;});

@@ -81,7 +81,7 @@ bool Topic::operator==(const Topic& obj) const
     {
         return false;
     }
-    else if((rcvLen > len) and ( strs[len-1].compare("+") != 0))
+    else if((rcvLen > len) and (strs[len-1].compare("+") != 0) and (strs[len-1].compare("#") != 0))
     {
         return false;
     }
@@ -109,11 +109,30 @@ bool Topic::operator==(const Topic& obj) const
 // Mqtt
 //-------------------------------------------------------------------
 const char *Mqtt::TAG = "Mqtt";
-Mqtt::Mqtt(std::string&& uri, std::string&& user) :
-    lastMsgId(-1),
+Mqtt::Mqtt(std::string&& _uri) :
+    uri(std::move(_uri)),
+    rcvEventId(MQTT_EVENT_ANY),
+    rcvMsgId(MQTT_EVENT_ANY),
     connected(false),
     mqttClientHandle(nullptr)
 {
+}
+
+Mqtt::~Mqtt()
+{
+    disConnect();
+}
+
+bool Mqtt::connect(const std::string& user)
+{
+    std::unique_lock uk(flowCtrlMutex);
+    assert(rcvEventId == MQTT_EVENT_ANY);
+    assert(rcvMsgId == MQTT_EVENT_ANY);
+    if(connected == true)
+    {
+        return true;
+    }
+    
     esp_mqtt_client_config_t mqtt_cfg{};
 
     mqtt_cfg.broker.address.uri = uri.c_str(),
@@ -127,34 +146,39 @@ Mqtt::Mqtt(std::string&& uri, std::string&& user) :
     
     /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
     esp_mqtt_client_register_event((esp_mqtt_client_handle_t)mqttClientHandle, (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID, mqttEvtHandler, this);
+
+    bool success = esp_mqtt_client_start((esp_mqtt_client_handle_t)mqttClientHandle) == ESP_OK;
+    if(success)
+    {
+        success = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this]{ return rcvEventId == MQTT_EVENT_CONNECTED;});
+    }
+
+    connected = success;
+    rcvMsgId = MQTT_EVENT_ANY;
+    rcvEventId = MQTT_EVENT_ANY;
+    ESP_LOGI(TAG, "%s %s", __func__, success ? "success" : "fails");
+    return success;
 }
 
-Mqtt::~Mqtt()
-{
-    connect(false);
-}
-
-bool Mqtt::connect(bool connect)
+bool Mqtt::disConnect()
 {
     std::unique_lock uk(flowCtrlMutex);
-    if(connected == connect)
+    assert(rcvEventId == MQTT_EVENT_ANY);
+    assert(rcvMsgId == MQTT_EVENT_ANY);
+    if(connected == false)
     {
         return true;
     }
-    bool success;
-    if(connect)
-    {
-        success = esp_mqtt_client_start((esp_mqtt_client_handle_t)mqttClientHandle) == ESP_OK;
-    }
-    else
-    {
-        success = esp_mqtt_client_stop((esp_mqtt_client_handle_t)mqttClientHandle) == ESP_OK;
-    }
+    bool success = esp_mqtt_client_stop((esp_mqtt_client_handle_t)mqttClientHandle) == ESP_OK;
     if(success)
     {
-        success = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, connect]{ return connected == connect;});
+        success = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this]{ return rcvEventId == MQTT_EVENT_DISCONNECTED;});
     }
-    ESP_LOGI(TAG, "%s %s", connect ? "connect" : "disconnect", success ? "success" : "fails");
+
+    connected = false;
+    rcvMsgId = MQTT_EVENT_ANY;
+    rcvEventId = MQTT_EVENT_ANY;
+    ESP_LOGI(TAG, "%s %s", __func__, success ? "success" : "fails");
     return success;
 }
 
@@ -162,88 +186,47 @@ bool Mqtt::publish(const std::string& topic, const std::string& data)
 {
     int qos = 0;
     std::unique_lock uk(flowCtrlMutex);
-    ESP_LOGI(TAG, "%s %s[%s]", __func__, topic.c_str(), data.c_str());
+    assert(rcvEventId == MQTT_EVENT_ANY);
+    assert(rcvMsgId == MQTT_EVENT_ANY);
 
-    int msg_id = esp_mqtt_client_publish((esp_mqtt_client_handle_t)mqttClientHandle, topic.c_str(), data.c_str(), 0, qos, 0);
-    ESP_LOGI(TAG, "%s msgId %d", __func__, msg_id);
-    bool result = true;
+    int msgId = esp_mqtt_client_publish((esp_mqtt_client_handle_t)mqttClientHandle, topic.c_str(), data.c_str(), 0, qos, 0);
+    ESP_LOGI(TAG, "%s msgId %d", __func__, msgId);
+    bool result = msgId == 0;
     if(qos > 0)
     {
-        result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msg_id]{ return lastMsgId == msg_id;});
-        lastMsgId = -1;
-    }
-    else
-    {
-        result = msg_id == 0;
+        result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]{ return rcvMsgId == msgId;});
     }
 
-    ESP_LOGI(TAG, "%s %s", __func__, result ? "success" : "fails");
+    rcvMsgId = MQTT_EVENT_ANY;
+    rcvEventId = MQTT_EVENT_ANY;
     return result;
 }
 
 bool Mqtt::subscribe(const std::string& topic, SubscribeCallback&& callback)
 {
     Topic tp(topic.c_str());
+    std::unique_lock uk(flowCtrlMutex);
     filter.emplace_back(Filter{std::move(tp), std::move(callback)});
     ESP_LOGI(TAG, "%s %s", "subscribe", tp.get().c_str());
-
-    std::unique_lock uk(flowCtrlMutex);
-    int msg_id = esp_mqtt_client_subscribe((esp_mqtt_client_handle_t)mqttClientHandle, tp.get().c_str(), 0);
-    bool result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msg_id]{ return lastMsgId == msg_id;});
-    ESP_LOGI(TAG, "%s %s", __func__, result ? "success" : "fails");
-    lastMsgId = -1;
-    return result;
-}
-
-void Mqtt::onSubscribed(const void* evt)
-{
-    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
-    esp_mqtt_client_handle_t client = event->client;
-    ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-
-    std::unique_lock uk(flowCtrlMutex);
-    if(lastMsgId == -1)
+    if(tp.get().compare("#") == 0)
     {
-        lastMsgId = event->msg_id;
-        uk.unlock();
-        flowCtrlCv.notify_one();
+        return true;
     }
-}
+    assert(rcvEventId == MQTT_EVENT_ANY);
+    assert(rcvMsgId == MQTT_EVENT_ANY);
 
-void Mqtt::onUnSubscribed(const void* evt)
-{
-    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
-    esp_mqtt_client_handle_t client = event->client;
-    ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
-
-    std::unique_lock uk(flowCtrlMutex);
-    if(lastMsgId == -1)
-    {
-        lastMsgId = event->msg_id;
-        uk.unlock();
-        flowCtrlCv.notify_one();
-    }
-}
-
-void Mqtt::onPublished(const void* evt)
-{
-    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
-    esp_mqtt_client_handle_t client = event->client;
-    ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+    int msgId = esp_mqtt_client_subscribe((esp_mqtt_client_handle_t)mqttClientHandle, tp.get().c_str(), 0);
+    bool result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]{ return rcvMsgId == msgId;});
     
-    std::unique_lock uk(flowCtrlMutex);
-    if(lastMsgId == -1)
-    {
-        lastMsgId = event->msg_id;
-        uk.unlock();
-        flowCtrlCv.notify_one();
-    }
+    rcvMsgId = MQTT_EVENT_ANY;
+    rcvEventId = MQTT_EVENT_ANY;
+    ESP_LOGI(TAG, "%s %s", __func__, result ? "success" : "fails");
+    return result;
 }
 
 void Mqtt::onError(const void* evt)
 {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
-    esp_mqtt_client_handle_t client = event->client;
     ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
     if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
         ESP_LOGI(TAG, "Last error code reported from esp-tls: 0x%x", event->error_handle->esp_tls_last_esp_err);
@@ -257,50 +240,11 @@ void Mqtt::onError(const void* evt)
     }
 }
 
-void Mqtt::onBeforeConnected(const void* evt)
-{
-    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
-    esp_mqtt_client_handle_t client = event->client;
-    ESP_LOGI(TAG, "MQTT_EVENT_BEFORE_CONNECT");
-}
-
-void Mqtt::onConnected(const void* evt)
-{
-    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
-    esp_mqtt_client_handle_t client = event->client;
-    ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
-
-    std::unique_lock uk(flowCtrlMutex);
-    if(not connected)
-    {
-        connected = true;
-        uk.unlock();
-        flowCtrlCv.notify_one();
-    }
-}
-
-void Mqtt::onDisConnected(const void* evt)
-{
-    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
-    esp_mqtt_client_handle_t client = event->client;
-    ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
-    std::unique_lock uk(flowCtrlMutex);
-    if(connected)
-    {
-        connected = false;
-        uk.unlock();
-        flowCtrlCv.notify_one();
-    }
-}
-
 void Mqtt::onData(const void* evt)
 {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
-    esp_mqtt_client_handle_t client = event->client;
-    ESP_LOGI(TAG, "MQTT_EVENT_DATA");
-    ESP_LOGI(TAG, "TOPIC=%.*s\r\n", event->topic_len, event->topic);
-    ESP_LOGI(TAG, "DATA=%.*s\r\n", event->data_len, event->data);
-    std::unique_lock uk(flowCtrlMutex);
+    ESP_LOGI(TAG, "TOPIC=%.*s", event->topic_len, event->topic);
+    ESP_LOGI(TAG, "DATA=%.*s", event->data_len, event->data);
     Topic rcvTopic(event->topic, event->topic_len);
     for(const auto& element : filter)
     {
@@ -316,36 +260,50 @@ void Mqtt::mqttEvtHandler(void* handlerArgs, const char* base, int32_t eventId, 
     Mqtt& mqtt = *(Mqtt*)handlerArgs;
     ESP_LOGI(TAG, "Event dispatched from event loop base=%s, eventId=%" PRIi32, base, eventId);
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)eventData;
-    esp_mqtt_client_handle_t client = event->client;
+
+    std::unique_lock uk(mqtt.flowCtrlMutex);
+    mqtt.rcvEventId = eventId;
+    mqtt.rcvMsgId = event->msg_id;
+
     switch ((esp_mqtt_event_id_t)eventId) {
     case MQTT_EVENT_ERROR:
         mqtt.onError(event);
         break;
     case MQTT_EVENT_CONNECTED:
+        ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
         mqtt.onConnected(event);
         break;
     case MQTT_EVENT_DISCONNECTED:
+        ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
         mqtt.onDisConnected(event);
         break;
     case MQTT_EVENT_SUBSCRIBED:
+        ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
         mqtt.onSubscribed(event);
         break;
     case MQTT_EVENT_UNSUBSCRIBED:
+        ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
         mqtt.onUnSubscribed(event);
         break;
     case MQTT_EVENT_PUBLISHED:
+        ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
         mqtt.onPublished(event);
         break;
     case MQTT_EVENT_DATA:
+        ESP_LOGI(TAG, "MQTT_EVENT_DATA");
         mqtt.onData(event);
         break;
     case MQTT_EVENT_BEFORE_CONNECT:
+        ESP_LOGI(TAG, "MQTT_EVENT_BEFORE_CONNECT");
         mqtt.onBeforeConnected(event);
         break;
     default:
         ESP_LOGI(TAG, "Other event id:%d", event->event_id);
         break;
     }
+
+    uk.unlock();
+    mqtt.flowCtrlCv.notify_one();
 }
 
 //-------------------------------------------------------------------
@@ -418,8 +376,9 @@ void Cloud::provision()
 }
 #endif
 
-ThingsBoard::ThingsBoard(std::string&& uri, std::string&& user) :
-    Mqtt(std::move(uri), std::move(user))
+const char *ThingsBoard::TAG = "ThingsBoard";
+ThingsBoard::ThingsBoard(std::string&& uri) :
+    Mqtt(std::move(uri))
 {
 
 }
@@ -427,4 +386,58 @@ ThingsBoard::ThingsBoard(std::string&& uri, std::string&& user) :
 ThingsBoard::~ThingsBoard()
 {
 
+}
+
+bool ThingsBoard::connect(const std::string& user)
+{
+    bool result = Mqtt::connect(user);
+    if(result)
+    {
+        subscribe("v1/devices/me/attributes/response/+", [](const char* data, uint32_t dataLen){
+            ESP_LOGI(TAG, "topic[%s] data[%.*s]", "v1/devices/me/attributes/response/+", (int)dataLen, data);
+            });
+        subscribe("v1/devices/me/attributes", [](const char* data, uint32_t dataLen){
+                ESP_LOGI(TAG, "topic[%s] data[%.*s]", "v1/devices/me/attributes", (int)dataLen, data);
+            });
+        subscribe("v2/fw/response/+", [](const char* data, uint32_t dataLen){
+                ESP_LOGI(TAG, "topic[%s] data[%.*s]", "v2/fw/response/+", (int)dataLen, data);
+            });
+    }
+    return true;
+}
+
+std::string ThingsBoard::provision(const std::string& deviceName, const std::string& devKey, const std::string& devSec)
+{
+    ESP_LOGI(TAG, "provision");
+    // Connect to the ThingsBoard server as a client wanting to provision a new device
+    if (!Mqtt::connect("provision")) {
+        ESP_LOGE(TAG, "Failed to connect to ThingsBoard server with provision account");
+        return std::string();
+    }
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::unique_lock uk(mutex);
+    volatile bool rcv = false;
+    std::string token;
+    bool success = subscribe("#", [&mutex, &cv, &token, &rcv](const char* data, uint32_t dataLen)
+        {    
+            ESP_LOGI(TAG, "topic[%s] data[%.*s]", "provision/response", (int)dataLen, data);
+            std::unique_lock uk(mutex);
+            token = std::string(data, data + dataLen);
+            rcv = true;
+            uk.unlock();
+            cv.notify_one();
+        });
+    if(success)
+    {
+        const char* buff = "{'provisionDeviceKey': 'tnq5nvcloyfr80awwr93', 'provisionDeviceSecret': '1q6fed37nr963nuik3r2', 'deviceName': 'F0:F5:BD:75:C7:D8'}";
+        ESP_LOGI(TAG, "%s", buff);
+        publish("/provision/request", buff);
+        bool result = cv.wait_for(uk, std::chrono::seconds(4), [&rcv]{return rcv;});
+        if(result)
+        {
+            ESP_LOGI(TAG, "RCV Token [%s]", token.c_str());
+        }
+    }
+    return std::string();
 }

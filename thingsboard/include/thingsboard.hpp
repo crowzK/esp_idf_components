@@ -26,22 +26,24 @@ class Mqtt
 {
 public:
     using SubscribeCallback = std::function<void(const char* data, uint32_t dataLen)>;
-    Mqtt(std::string&& uri, std::string&& user);
+    Mqtt(std::string&& uri);
     ~Mqtt();
 
-    bool connect(bool connect = true);
+    virtual bool connect(const std::string& user);
+    bool disConnect();
     bool publish(const std::string& topic, const std::string& data);
     bool subscribe(const std::string& topic, SubscribeCallback&& callback);
 
 protected:
-    virtual void onSubscribed(const void* evt);
-    virtual void onUnSubscribed(const void* evt);
-    virtual void onPublished(const void* evt);
     virtual void onError(const void* evt);
-    virtual void onBeforeConnected(const void* evt);
-    virtual void onConnected(const void* evt);
-    virtual void onDisConnected(const void* evt);
     virtual void onData(const void* evt);
+
+    virtual void onSubscribed(const void* evt) { };
+    virtual void onUnSubscribed(const void* evt) { };
+    virtual void onPublished(const void* evt) { };
+    virtual void onBeforeConnected(const void* evt) { };
+    virtual void onConnected(const void* evt) { };
+    virtual void onDisConnected(const void* evt) { };
 
 private:
     static const char *TAG;
@@ -50,7 +52,9 @@ private:
         const Topic topic;
         const SubscribeCallback callback;
     };
-    volatile int lastMsgId;
+    const std::string uri;
+    volatile int32_t rcvEventId;
+    volatile int32_t rcvMsgId;
     volatile bool connected;
     std::mutex flowCtrlMutex;
     std::condition_variable flowCtrlCv;
@@ -62,10 +66,13 @@ private:
 class ThingsBoard : public Mqtt
 {
 public:
-    ThingsBoard(std::string&& uri, std::string&& user);
+    ThingsBoard(std::string&& uri);
     ~ThingsBoard();
+    bool connect(const std::string& user) override;
+    std::string provision(const std::string& deviceName, const std::string& devKey, const std::string& devSec);
 
 protected:
+    static const char *TAG;
     std::mutex evtMutex;
     std::condition_variable evtCv;
 };

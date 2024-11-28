@@ -23,6 +23,7 @@
 #include "mqtt_client.h"
 #include "esp_tls.h"
 #include <sys/param.h>
+#include "cJSON.h"
 
 #include "thingsboard.hpp"
 
@@ -207,7 +208,35 @@ bool Mqtt::subscribe(const std::string& topic, SubscribeCallback&& callback)
     Topic tp(topic.c_str());
     std::unique_lock uk(flowCtrlMutex);
     filter.emplace_back(Filter{std::move(tp), std::move(callback)});
-    ESP_LOGI(TAG, "%s %s", "subscribe", tp.get().c_str());
+    ESP_LOGI(TAG, "%s %s", __func__, tp.get().c_str());
+    if(tp.get().compare("#") == 0)
+    {
+        return true;
+    }
+    assert(rcvEventId == MQTT_EVENT_ANY);
+    assert(rcvMsgId == MQTT_EVENT_ANY);
+
+    int msgId = esp_mqtt_client_subscribe((esp_mqtt_client_handle_t)mqttClientHandle, tp.get().c_str(), 0);
+    bool result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]{ return rcvMsgId == msgId;});
+    
+    rcvMsgId = MQTT_EVENT_ANY;
+    rcvEventId = MQTT_EVENT_ANY;
+    ESP_LOGI(TAG, "%s %s", __func__, result ? "success" : "fails");
+    return result;
+}
+
+bool Mqtt::unsubscribe(const std::string& topic)
+{
+    Topic tp(topic.c_str());
+    std::unique_lock uk(flowCtrlMutex);
+    auto it = std::find_if(filter.begin(), filter.end(), [&tp](const auto& element){
+        return element.topic == tp;
+    });
+    if(it != filter.end())
+    {
+        filter.erase(it);
+    }
+    ESP_LOGI(TAG, "%s %s", __func__, tp.get().c_str());
     if(tp.get().compare("#") == 0)
     {
         return true;
@@ -246,13 +275,16 @@ void Mqtt::onData(const void* evt)
     ESP_LOGI(TAG, "TOPIC=%.*s", event->topic_len, event->topic);
     ESP_LOGI(TAG, "DATA=%.*s", event->data_len, event->data);
     Topic rcvTopic(event->topic, event->topic_len);
+    std::string data(event->data, event->data_len);
     for(const auto& element : filter)
     {
         if(element.topic == rcvTopic)
         {
-            element.callback(event->data, event->data_len);
+            element.callback(rcvTopic.get(), data);
         }
     }
+    rcvMsgId = MQTT_EVENT_ANY;
+    rcvEventId = MQTT_EVENT_ANY;
 }
 
 void Mqtt::mqttEvtHandler(void* handlerArgs, const char* base, int32_t eventId, void* eventData) noexcept
@@ -393,14 +425,14 @@ bool ThingsBoard::connect(const std::string& user)
     bool result = Mqtt::connect(user);
     if(result)
     {
-        subscribe("v1/devices/me/attributes/response/+", [](const char* data, uint32_t dataLen){
-            ESP_LOGI(TAG, "topic[%s] data[%.*s]", "v1/devices/me/attributes/response/+", (int)dataLen, data);
+        subscribe("v1/devices/me/attributes/response/+", [](const std::string& topic, const std::string& data){
+                ESP_LOGI(TAG, "topic[%s] data[%s]", topic.c_str(), data.c_str());
             });
-        subscribe("v1/devices/me/attributes", [](const char* data, uint32_t dataLen){
-                ESP_LOGI(TAG, "topic[%s] data[%.*s]", "v1/devices/me/attributes", (int)dataLen, data);
+        subscribe("v1/devices/me/attributes", [](const std::string& topic, const std::string& data){
+                ESP_LOGI(TAG, "topic[%s] data[%s]", topic.c_str(), data.c_str());
             });
-        subscribe("v2/fw/response/+", [](const char* data, uint32_t dataLen){
-                ESP_LOGI(TAG, "topic[%s] data[%.*s]", "v2/fw/response/+", (int)dataLen, data);
+        subscribe("v2/fw/response/+", [](const std::string& topic, const std::string& data){
+                ESP_LOGI(TAG, "topic[%s] data[%s]", topic.c_str(), data.c_str());
             });
     }
     return true;
@@ -419,11 +451,11 @@ std::string ThingsBoard::provision(const std::string& deviceName, const std::str
     std::unique_lock uk(mutex);
     volatile bool rcv = false;
     std::string token;
-    bool success = subscribe("#", [&mutex, &cv, &token, &rcv](const char* data, uint32_t dataLen)
+    bool success = subscribe("#", [&mutex, &cv, &token, &rcv](const std::string& topic, const std::string& data)
         {    
-            ESP_LOGI(TAG, "topic[%s] data[%.*s]", "provision/response", (int)dataLen, data);
+            ESP_LOGI(TAG, "topic[%s] data[%s]", topic.c_str(), data.c_str());
             std::unique_lock uk(mutex);
-            token = std::string(data, data + dataLen);
+            token = data;
             rcv = true;
             uk.unlock();
             cv.notify_one();
@@ -437,8 +469,17 @@ std::string ThingsBoard::provision(const std::string& deviceName, const std::str
         bool result = cv.wait_for(uk, std::chrono::seconds(4), [&rcv]{return rcv;});
         if(result)
         {
-            ESP_LOGI(TAG, "RCV Token [%s]", token.c_str());
+            cJSON* json = cJSON_Parse(token.c_str());
+            cJSON* credential = cJSON_GetObjectItem(json, "credentialsValue");
+            if(cJSON_IsString(credential) and (credential->valuestring != nullptr))
+            {
+                token = std::string(credential->valuestring);
+            }
+            cJSON_Delete(json);
         }
+        ESP_LOGI(TAG, "Token [%s]", token.c_str());
+        unsubscribe("#");
     }
-    return std::string();
+    Mqtt::disConnect();
+    return token;
 }

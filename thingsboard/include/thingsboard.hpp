@@ -25,7 +25,7 @@ protected:
 class Mqtt
 {
 public:
-    using SubscribeCallback = std::function<void(const char* data, uint32_t dataLen)>;
+    using SubscribeCallback = std::function<void(const std::string& topic, const std::string& data)>;
     Mqtt(std::string&& uri);
     ~Mqtt();
 
@@ -33,6 +33,7 @@ public:
     bool disConnect();
     bool publish(const std::string& topic, const std::string& data);
     bool subscribe(const std::string& topic, SubscribeCallback&& callback);
+    bool unsubscribe(const std::string& topic);
 
 protected:
     virtual void onError(const void* evt);
@@ -49,8 +50,8 @@ private:
     static const char *TAG;
     struct Filter
     {
-        const Topic topic;
-        const SubscribeCallback callback;
+        Topic topic;
+        SubscribeCallback callback;
     };
     const std::string uri;
     volatile int32_t rcvEventId;

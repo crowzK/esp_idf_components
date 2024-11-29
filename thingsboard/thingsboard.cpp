@@ -23,7 +23,6 @@
 #include "mqtt_client.h"
 #include "esp_tls.h"
 #include <sys/param.h>
-#include "cJSON.h"
 
 #include "thingsboard.hpp"
 
@@ -157,7 +156,7 @@ bool Mqtt::connect(const std::string& user)
     connected = success;
     rcvMsgId = MQTT_EVENT_ANY;
     rcvEventId = MQTT_EVENT_ANY;
-    ESP_LOGI(TAG, "%s %s", __func__, success ? "success" : "fails");
+    ESP_LOGD(TAG, "%s %s", __func__, success ? "success" : "fails");
     return success;
 }
 
@@ -179,7 +178,7 @@ bool Mqtt::disConnect()
     connected = false;
     rcvMsgId = MQTT_EVENT_ANY;
     rcvEventId = MQTT_EVENT_ANY;
-    ESP_LOGI(TAG, "%s %s", __func__, success ? "success" : "fails");
+    ESP_LOGD(TAG, "%s %s", __func__, success ? "success" : "fails");
     return success;
 }
 
@@ -191,7 +190,7 @@ bool Mqtt::publish(const std::string& topic, const std::string& data)
     assert(rcvMsgId == MQTT_EVENT_ANY);
 
     int msgId = esp_mqtt_client_publish((esp_mqtt_client_handle_t)mqttClientHandle, topic.c_str(), data.c_str(), 0, qos, 0);
-    ESP_LOGI(TAG, "%s msgId %d", __func__, msgId);
+    ESP_LOGD(TAG, "%s msgId %d", __func__, msgId);
     bool result = msgId == 0;
     if(qos > 0)
     {
@@ -208,7 +207,7 @@ bool Mqtt::subscribe(const std::string& topic, SubscribeCallback&& callback)
     Topic tp(topic.c_str());
     std::unique_lock uk(flowCtrlMutex);
     filter.emplace_back(Filter{std::move(tp), std::move(callback)});
-    ESP_LOGI(TAG, "%s %s", __func__, tp.get().c_str());
+    ESP_LOGD(TAG, "%s %s", __func__, tp.get().c_str());
     if(tp.get().compare("#") == 0)
     {
         return true;
@@ -221,7 +220,7 @@ bool Mqtt::subscribe(const std::string& topic, SubscribeCallback&& callback)
     
     rcvMsgId = MQTT_EVENT_ANY;
     rcvEventId = MQTT_EVENT_ANY;
-    ESP_LOGI(TAG, "%s %s", __func__, result ? "success" : "fails");
+    ESP_LOGD(TAG, "%s %s", __func__, result ? "success" : "fails");
     return result;
 }
 
@@ -236,7 +235,7 @@ bool Mqtt::unsubscribe(const std::string& topic)
     {
         filter.erase(it);
     }
-    ESP_LOGI(TAG, "%s %s", __func__, tp.get().c_str());
+    ESP_LOGD(TAG, "%s %s", __func__, tp.get().c_str());
     if(tp.get().compare("#") == 0)
     {
         return true;
@@ -249,7 +248,7 @@ bool Mqtt::unsubscribe(const std::string& topic)
     
     rcvMsgId = MQTT_EVENT_ANY;
     rcvEventId = MQTT_EVENT_ANY;
-    ESP_LOGI(TAG, "%s %s", __func__, result ? "success" : "fails");
+    ESP_LOGD(TAG, "%s %s", __func__, result ? "success" : "fails");
     return result;
 }
 
@@ -272,10 +271,9 @@ void Mqtt::onError(const void* evt)
 void Mqtt::onData(const void* evt)
 {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
-    ESP_LOGI(TAG, "TOPIC=%.*s", event->topic_len, event->topic);
-    ESP_LOGI(TAG, "DATA=%.*s", event->data_len, event->data);
+    ESP_LOGD(TAG, "TOPIC=%.*s, data Len %d", event->topic_len, event->topic, event->data_len);
     Topic rcvTopic(event->topic, event->topic_len);
-    std::string data(event->data, event->data_len);
+    std::vector<char> data(event->data, event->data+event->data_len);
     for(const auto& element : filter)
     {
         if(element.topic == rcvTopic)
@@ -290,7 +288,7 @@ void Mqtt::onData(const void* evt)
 void Mqtt::mqttEvtHandler(void* handlerArgs, const char* base, int32_t eventId, void* eventData) noexcept
 {
     Mqtt& mqtt = *(Mqtt*)handlerArgs;
-    ESP_LOGI(TAG, "Event dispatched from event loop base=%s, eventId=%" PRIi32, base, eventId);
+    ESP_LOGD(TAG, "Event dispatched from event loop base=%s, eventId=%" PRIi32, base, eventId);
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)eventData;
 
     std::unique_lock uk(mqtt.flowCtrlMutex);
@@ -302,35 +300,35 @@ void Mqtt::mqttEvtHandler(void* handlerArgs, const char* base, int32_t eventId, 
         mqtt.onError(event);
         break;
     case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+        ESP_LOGD(TAG, "MQTT_EVENT_CONNECTED");
         mqtt.onConnected(event);
         break;
     case MQTT_EVENT_DISCONNECTED:
-        ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+        ESP_LOGD(TAG, "MQTT_EVENT_DISCONNECTED");
         mqtt.onDisConnected(event);
         break;
     case MQTT_EVENT_SUBSCRIBED:
-        ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+        ESP_LOGD(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
         mqtt.onSubscribed(event);
         break;
     case MQTT_EVENT_UNSUBSCRIBED:
-        ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+        ESP_LOGD(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
         mqtt.onUnSubscribed(event);
         break;
     case MQTT_EVENT_PUBLISHED:
-        ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+        ESP_LOGD(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
         mqtt.onPublished(event);
         break;
     case MQTT_EVENT_DATA:
-        ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+        ESP_LOGD(TAG, "MQTT_EVENT_DATA");
         mqtt.onData(event);
         break;
     case MQTT_EVENT_BEFORE_CONNECT:
-        ESP_LOGI(TAG, "MQTT_EVENT_BEFORE_CONNECT");
+        ESP_LOGD(TAG, "MQTT_EVENT_BEFORE_CONNECT");
         mqtt.onBeforeConnected(event);
         break;
     default:
-        ESP_LOGI(TAG, "Other event id:%d", event->event_id);
+        ESP_LOGD(TAG, "Other event id:%d", event->event_id);
         break;
     }
 
@@ -410,7 +408,8 @@ void Cloud::provision()
 
 const char *ThingsBoard::TAG = "ThingsBoard";
 ThingsBoard::ThingsBoard(std::string&& uri) :
-    Mqtt(std::move(uri))
+    Mqtt(std::move(uri)),
+    attributeReqId(0)
 {
 
 }
@@ -425,14 +424,8 @@ bool ThingsBoard::connect(const std::string& user)
     bool result = Mqtt::connect(user);
     if(result)
     {
-        subscribe("v1/devices/me/attributes/response/+", [](const std::string& topic, const std::string& data){
-                ESP_LOGI(TAG, "topic[%s] data[%s]", topic.c_str(), data.c_str());
-            });
-        subscribe("v1/devices/me/attributes", [](const std::string& topic, const std::string& data){
-                ESP_LOGI(TAG, "topic[%s] data[%s]", topic.c_str(), data.c_str());
-            });
-        subscribe("v2/fw/response/+", [](const std::string& topic, const std::string& data){
-                ESP_LOGI(TAG, "topic[%s] data[%s]", topic.c_str(), data.c_str());
+        subscribe("v1/devices/me/attributes", [](const std::string& topic, const std::vector<char>& data){
+                ESP_LOGD(TAG, "topic[%s] data[%s]", topic.c_str(), data.data());
             });
     }
     return true;
@@ -440,7 +433,7 @@ bool ThingsBoard::connect(const std::string& user)
 
 std::string ThingsBoard::provision(const std::string& deviceName, const std::string& devKey, const std::string& devSec)
 {
-    ESP_LOGI(TAG, "provision");
+    ESP_LOGD(TAG, "%s", __func__);
     // Connect to the ThingsBoard server as a client wanting to provision a new device
     if (!Mqtt::connect("provision")) {
         ESP_LOGE(TAG, "Failed to connect to ThingsBoard server with provision account");
@@ -451,11 +444,11 @@ std::string ThingsBoard::provision(const std::string& deviceName, const std::str
     std::unique_lock uk(mutex);
     volatile bool rcv = false;
     std::string token;
-    bool success = subscribe("#", [&mutex, &cv, &token, &rcv](const std::string& topic, const std::string& data)
+    bool success = subscribe("#", [&mutex, &cv, &token, &rcv](const std::string& topic, const std::vector<char>& data)
         {    
-            ESP_LOGI(TAG, "topic[%s] data[%s]", topic.c_str(), data.c_str());
             std::unique_lock uk(mutex);
-            token = data;
+            token = std::string(data.begin(), data.end());
+            ESP_LOGD(TAG, "topic[%s] data[%s]", topic.c_str(), token.c_str());
             rcv = true;
             uk.unlock();
             cv.notify_one();
@@ -464,22 +457,100 @@ std::string ThingsBoard::provision(const std::string& deviceName, const std::str
     {
         char buff[300];
         snprintf(buff, sizeof(buff), "{'provisionDeviceKey': '%s', 'provisionDeviceSecret': '%s', 'deviceName': '%s'}", devKey.c_str(), devSec.c_str(), deviceName.c_str());
-        ESP_LOGI(TAG, "%s", buff);
+        ESP_LOGD(TAG, "%s", buff);
         publish("/provision/request", buff);
         bool result = cv.wait_for(uk, std::chrono::seconds(4), [&rcv]{return rcv;});
         if(result)
         {
-            cJSON* json = cJSON_Parse(token.c_str());
-            cJSON* credential = cJSON_GetObjectItem(json, "credentialsValue");
-            if(cJSON_IsString(credential) and (credential->valuestring != nullptr))
+            ArduinoJson::JsonDocument doc;
+            ArduinoJson::DeserializationError error = ArduinoJson::deserializeJson(doc, token.c_str());
+            if(error) 
             {
-                token = std::string(credential->valuestring);
+                ESP_LOGI(TAG, "deserializeJson() failed: %s", error.c_str());
             }
-            cJSON_Delete(json);
+            else
+            {
+                token = std::string(doc["credentialsValue"]);
+            }
         }
         ESP_LOGI(TAG, "Token [%s]", token.c_str());
         unsubscribe("#");
     }
     Mqtt::disConnect();
     return token;
+}
+
+ArduinoJson::JsonDocument ThingsBoard::requestAttributes(const std::string& data)
+{
+    const char* reqTopic = "v1/devices/me/attributes/request/%lu";
+    const char* resTopic = "v1/devices/me/attributes/response/+";
+    
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::unique_lock uk(mutex);
+    attributeReqId += 1;
+    ArduinoJson::JsonDocument doc;
+    subscribe(resTopic, [&mutex, &cv, &doc](const std::string& topic, const std::vector<char>& data){
+            std::unique_lock uk(mutex);
+            ArduinoJson::DeserializationError error = ArduinoJson::deserializeJson(doc, data);
+            uk.unlock();
+            cv.notify_one();
+        });
+
+    char buf[300]{};
+    snprintf(buf, 300, reqTopic, attributeReqId);
+    publish(buf, data);
+
+    bool result = cv.wait_for(uk, std::chrono::seconds(4), [&doc]{return not doc.isNull();});
+    
+    unsubscribe(resTopic);
+    ESP_LOGD(TAG, "%s %s", __func__, result ? "success" : "fails");
+    return doc;
+}
+
+void ThingsBoard::firmwareUpdate()
+{
+    constexpr uint32_t chunkSize = 512;
+    ESP_LOGD(TAG, "%s", __func__);
+
+    ArduinoJson::JsonDocument doc = requestAttributes(std::string("{'sharedKeys': 'fw_checksum,fw_checksum_algorithm,fw_size,fw_title,fw_version'}"));
+    ESP_LOGI(TAG, "fw_title: %s", std::string(doc["shared"]["fw_title"]).c_str());
+    ESP_LOGI(TAG, "fw_size: %s", std::string(doc["shared"]["fw_size"]).c_str());
+    ESP_LOGI(TAG, "fw_version: %s", std::string(doc["shared"]["fw_version"]).c_str());
+    ESP_LOGI(TAG, "fw_checksum_algorithm: %s", std::string(doc["shared"]["fw_checksum_algorithm"]).c_str());
+    ESP_LOGI(TAG, "fw_checksum: %s", std::string(doc["shared"]["fw_checksum"]).c_str());
+
+    const uint32_t fwSize = doc["shared"]["fw_size"];
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::unique_lock uk(mutex);
+    volatile bool rcv = false;
+    //tb.publish("v1/devices/me/telemetry", "{'current_fw_title': 'Test', 'current_fw_version': '0'}");
+    uint32_t rcvSize = 0;
+    int reqId = 0;
+    int currentChunk = 0;
+    
+    subscribe("v2/fw/response/+", 
+        [&mutex, &cv, &rcv, &rcvSize](const std::string& topic, const std::vector<char>& data)
+        {
+            std::unique_lock uk(mutex);
+            rcv = true;
+            rcvSize += data.size();
+            uk.unlock();
+            cv.notify_one();
+        });
+    bool result = false;
+    do
+    {
+        char buf[300]{};
+        snprintf(buf, 300, "v2/fw/request/%d/chunk/%d", reqId, currentChunk);
+        uint32_t _chunkSize = std::min(chunkSize, fwSize-rcvSize);
+        publish(buf, std::to_string(_chunkSize));
+        result = cv.wait_for(uk, std::chrono::seconds(4), [&rcv]{return rcv;});
+        ESP_LOGI(TAG, "RcvSize %d chunkSize %d", (int)rcvSize, (int)_chunkSize);
+        rcv = false;
+        currentChunk+=1;
+    } while (rcvSize < fwSize and result);
+
+    ESP_LOGI(TAG, "%s %s", __func__, result ? "success" : "fails");
 }

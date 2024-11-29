@@ -7,6 +7,7 @@
 #include <map>
 #include <atomic>
 #include <condition_variable>
+#include "ArduinoJson.hpp"
 
 class Topic
 {
@@ -25,7 +26,7 @@ protected:
 class Mqtt
 {
 public:
-    using SubscribeCallback = std::function<void(const std::string& topic, const std::string& data)>;
+    using SubscribeCallback = std::function<void(const std::string& topic, const std::vector<char>& data)>;
     Mqtt(std::string&& uri);
     ~Mqtt();
 
@@ -71,9 +72,12 @@ public:
     ~ThingsBoard();
     bool connect(const std::string& user) override;
     std::string provision(const std::string& deviceName, const std::string& devKey, const std::string& devSec);
+    void firmwareUpdate();
+    ArduinoJson::JsonDocument requestAttributes(const std::string& data);
 
 protected:
     static const char *TAG;
     std::mutex evtMutex;
     std::condition_variable evtCv;
+    uint32_t attributeReqId;
 };

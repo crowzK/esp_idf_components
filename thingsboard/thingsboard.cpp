@@ -432,16 +432,6 @@ std::string ThingsBoard::provision(const std::string& deviceName, const std::str
     return std::string(doc["credentialsValue"]);
 }
 
-ArduinoJson::JsonDocument ThingsBoard::requestAttributes(const ArduinoJson::JsonDocument& doc)
-{
-    const int id = attributeReqId++;
-    Topic pubTopic(std::string("v1/devices/me/attributes/request/") + std::to_string(id));
-    Topic subTopic("v1/devices/me/attributes/response/+");
-    ArduinoJson::JsonDocument _doc = request(std::move(pubTopic), std::move(subTopic), doc);
-    ESP_LOGD(TAG, "%s %s", __func__, _doc.isNull() ? "fails" : "success");
-    return _doc;
-}
-
 void ThingsBoard::firmwareUpdate()
 {
     constexpr uint32_t chunkSize = 512;
@@ -551,4 +541,21 @@ void ThingsBoard::firmwareUpdate()
         ESP_LOGE(TAG, "esp_ota_set_boot_partition failed (%s)!", esp_err_to_name(err));
     }
     esp_restart();
+}
+
+ArduinoJson::JsonDocument ThingsBoard::requestAttributes(const ArduinoJson::JsonDocument& doc)
+{
+    const int id = attributeReqId++;
+    Topic pubTopic(std::string("v1/devices/me/attributes/request/") + std::to_string(id));
+    Topic subTopic("v1/devices/me/attributes/response/+");
+    ArduinoJson::JsonDocument _doc = request(std::move(pubTopic), std::move(subTopic), doc);
+    ESP_LOGD(TAG, "%s %s", __func__, _doc.isNull() ? "fails" : "success");
+    return _doc;
+}
+
+bool ThingsBoard::sendTelemetry(const ArduinoJson::JsonDocument& doc)
+{
+    std::string json;
+    ArduinoJson::serializeJson(doc, json);
+    return publish("v1/devices/me/telemetry", json.c_str());
 }

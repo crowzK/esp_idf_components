@@ -76,6 +76,7 @@ public:
     std::string provision(const std::string& deviceName, const std::string& devKey, const std::string& devSec);
     void firmwareUpdate();
     ArduinoJson::JsonDocument requestAttributes(const ArduinoJson::JsonDocument& doc);
+    bool sendTelemetry(const ArduinoJson::JsonDocument& doc);
 
 protected:
     static const char *TAG;

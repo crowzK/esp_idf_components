@@ -28,6 +28,7 @@
 #include "esp_ota_ops.h"
 
 #include "thingsboard.hpp"
+#include "version.hpp"
 
 
 //-------------------------------------------------------------------
@@ -455,6 +456,15 @@ void ThingsBoard::firmwareUpdate()
     ESP_LOGI(TAG, "fw_version: %s", std::string(doc["shared"]["fw_version"]).c_str());
     ESP_LOGI(TAG, "fw_checksum_algorithm: %s", std::string(doc["shared"]["fw_checksum_algorithm"]).c_str());
     ESP_LOGI(TAG, "fw_checksum: %s", std::string(doc["shared"]["fw_checksum"]).c_str());
+
+    std::string ver = std::string(doc["shared"]["fw_version"]);
+    Version rcvVer(ver.c_str());
+
+    if(not rcvVer.isHigherVersion())
+    {
+        ESP_LOGI(TAG, "Cannot find new verion server{%s}, current{%s}:", rcvVer.get().c_str(), Version::getCurrentSWVer().get().c_str());
+        return;
+    }
 
     const uint32_t fwSize = doc["shared"]["fw_size"];
     std::mutex mutex;

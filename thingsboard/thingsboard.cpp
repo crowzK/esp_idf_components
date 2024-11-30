@@ -30,17 +30,16 @@
 #include "thingsboard.hpp"
 #include "version.hpp"
 
-
 //-------------------------------------------------------------------
 // Topic
 //-------------------------------------------------------------------
-Topic::Topic(const char* topic, uint32_t strLen)
+Topic::Topic(const char *topic, uint32_t strLen)
 {
-    const char* pCh = topic;
+    const char *pCh = topic;
     std::string str;
-    for(int i = 0 ; i < strLen; i++)
+    for (int i = 0; i < strLen; i++)
     {
-        if(topic[i] == '/')
+        if (topic[i] == '/')
         {
             strs.emplace_back(str);
             str = "";
@@ -53,28 +52,24 @@ Topic::Topic(const char* topic, uint32_t strLen)
     strs.emplace_back(str);
 }
 
-Topic::Topic(const char* topic) :
-    Topic(topic, strlen(topic))
+Topic::Topic(const char *topic) : Topic(topic, strlen(topic))
 {
 }
 
-Topic::Topic(std::string&& topic) :
-    Topic(topic.c_str(), topic.size())
+Topic::Topic(std::string &&topic) : Topic(topic.c_str(), topic.size())
 {
-
 }
 
 Topic::~Topic()
 {
-    
 }
 
 const std::string Topic::get() const
 {
     std::string str;
-    for(int i = 0; i < strs.size(); i++)
+    for (int i = 0; i < strs.size(); i++)
     {
-        if(i != 0)
+        if (i != 0)
         {
             str += '/';
         }
@@ -83,27 +78,27 @@ const std::string Topic::get() const
     return str;
 }
 
-bool Topic::operator==(const Topic& obj) const
+bool Topic::operator==(const Topic &obj) const
 {
     const int len = strs.size();
     const int rcvLen = obj.strs.size();
-    if(rcvLen < len)
+    if (rcvLen < len)
     {
         return false;
     }
-    else if((rcvLen > len) and (strs[len-1].compare("+") != 0) and (strs[len-1].compare("#") != 0))
+    else if ((rcvLen > len) and (strs[len - 1].compare("+") != 0) and (strs[len - 1].compare("#") != 0))
     {
         return false;
     }
-    for(int i = 0; i < len; i++)
+    for (int i = 0; i < len; i++)
     {
-        if(strs[i].compare(obj.strs[i]) != 0)
+        if (strs[i].compare(obj.strs[i]) != 0)
         {
-            if(strs[i].compare("+") == 0)
+            if (strs[i].compare("+") == 0)
             {
                 continue;
             }
-            else if(strs[i].compare("#") == 0)
+            else if (strs[i].compare("#") == 0)
             {
                 break;
             }
@@ -119,12 +114,11 @@ bool Topic::operator==(const Topic& obj) const
 // Mqtt
 //-------------------------------------------------------------------
 const char *Mqtt::TAG = "Mqtt";
-Mqtt::Mqtt(std::string&& _uri) :
-    uri(std::move(_uri)),
-    rcvEventId(MQTT_EVENT_ANY),
-    rcvMsgId(MQTT_EVENT_ANY),
-    connected(false),
-    mqttClientHandle(nullptr)
+Mqtt::Mqtt(std::string &&_uri) : uri(std::move(_uri)),
+                                 rcvEventId(MQTT_EVENT_ANY),
+                                 rcvMsgId(MQTT_EVENT_ANY),
+                                 connected(false),
+                                 mqttClientHandle(nullptr)
 {
 }
 
@@ -133,34 +127,35 @@ Mqtt::~Mqtt()
     disConnect();
 }
 
-bool Mqtt::connect(const std::string& user)
+bool Mqtt::connect(const std::string &user)
 {
     std::unique_lock uk(flowCtrlMutex);
     assert(rcvEventId == MQTT_EVENT_ANY);
     assert(rcvMsgId == MQTT_EVENT_ANY);
-    if(connected == true)
+    if (connected == true)
     {
         return true;
     }
-    
+
     esp_mqtt_client_config_t mqtt_cfg{};
 
     mqtt_cfg.broker.address.uri = uri.c_str(),
     mqtt_cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
     mqtt_cfg.session.protocol_ver = MQTT_PROTOCOL_V_3_1_1;
     mqtt_cfg.credentials.username = user.c_str();
-    
+
     mqtt_cfg.network.disable_auto_reconnect = true;
 
-    mqttClientHandle = (void*)esp_mqtt_client_init(&mqtt_cfg);
-    
+    mqttClientHandle = (void *)esp_mqtt_client_init(&mqtt_cfg);
+
     /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
     esp_mqtt_client_register_event((esp_mqtt_client_handle_t)mqttClientHandle, (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID, mqttEvtHandler, this);
 
     bool success = esp_mqtt_client_start((esp_mqtt_client_handle_t)mqttClientHandle) == ESP_OK;
-    if(success)
+    if (success)
     {
-        success = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this]{ return rcvEventId == MQTT_EVENT_CONNECTED;});
+        success = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this]
+                                      { return rcvEventId == MQTT_EVENT_CONNECTED; });
     }
 
     connected = success;
@@ -175,14 +170,15 @@ bool Mqtt::disConnect()
     std::unique_lock uk(flowCtrlMutex);
     assert(rcvEventId == MQTT_EVENT_ANY);
     assert(rcvMsgId == MQTT_EVENT_ANY);
-    if(connected == false)
+    if (connected == false)
     {
         return true;
     }
     bool success = esp_mqtt_client_stop((esp_mqtt_client_handle_t)mqttClientHandle) == ESP_OK;
-    if(success)
+    if (success)
     {
-        success = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this]{ return rcvEventId == MQTT_EVENT_DISCONNECTED;});
+        success = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this]
+                                      { return rcvEventId == MQTT_EVENT_DISCONNECTED; });
     }
 
     connected = false;
@@ -192,7 +188,7 @@ bool Mqtt::disConnect()
     return success;
 }
 
-bool Mqtt::publish(const std::string& topic, const std::string& data)
+bool Mqtt::publish(const std::string &topic, const std::string &data)
 {
     int qos = 0;
     std::unique_lock uk(flowCtrlMutex);
@@ -202,9 +198,10 @@ bool Mqtt::publish(const std::string& topic, const std::string& data)
     int msgId = esp_mqtt_client_publish((esp_mqtt_client_handle_t)mqttClientHandle, topic.c_str(), data.c_str(), 0, qos, 0);
     ESP_LOGD(TAG, "%s msgId %d", __func__, msgId);
     bool result = msgId == 0;
-    if(qos > 0)
+    if (qos > 0)
     {
-        result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]{ return rcvMsgId == msgId;});
+        result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]
+                                     { return rcvMsgId == msgId; });
     }
 
     rcvMsgId = MQTT_EVENT_ANY;
@@ -212,13 +209,13 @@ bool Mqtt::publish(const std::string& topic, const std::string& data)
     return result;
 }
 
-bool Mqtt::subscribe(const std::string& topic, SubscribeCallback&& callback)
+bool Mqtt::subscribe(const std::string &topic, SubscribeCallback &&callback)
 {
     Topic tp(topic.c_str());
     std::unique_lock uk(flowCtrlMutex);
     filter.emplace_back(Filter{std::move(tp), std::move(callback)});
     ESP_LOGD(TAG, "%s %s", __func__, tp.get().c_str());
-    if(tp.get().compare("#") == 0)
+    if (tp.get().compare("#") == 0)
     {
         return true;
     }
@@ -226,29 +223,29 @@ bool Mqtt::subscribe(const std::string& topic, SubscribeCallback&& callback)
     assert(rcvMsgId == MQTT_EVENT_ANY);
 
     int msgId = esp_mqtt_client_subscribe((esp_mqtt_client_handle_t)mqttClientHandle, tp.get().c_str(), 0);
-    bool result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]{ return rcvMsgId == msgId;});
-    
+    bool result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]
+                                      { return rcvMsgId == msgId; });
+
     rcvMsgId = MQTT_EVENT_ANY;
     rcvEventId = MQTT_EVENT_ANY;
     ESP_LOGD(TAG, "%s %s", __func__, result ? "success" : "fails");
     return result;
 }
 
-bool Mqtt::unsubscribe(const std::string& topic)
+bool Mqtt::unsubscribe(const std::string &topic)
 {
     Topic tp(topic.c_str());
     std::unique_lock uk(flowCtrlMutex);
 
-    auto it = std::find_if(filter.begin(), filter.end(), [&tp](const auto& element){
-        return element.topic == tp;
-    });
-    if(it == filter.end())
+    auto it = std::find_if(filter.begin(), filter.end(), [&tp](const auto &element)
+                           { return element.topic == tp; });
+    if (it == filter.end())
     {
         return true;
     }
     filter.erase(it);
     ESP_LOGD(TAG, "%s %s", __func__, tp.get().c_str());
-    if(tp.get().compare("#") == 0)
+    if (tp.get().compare("#") == 0)
     {
         return true;
     }
@@ -256,39 +253,45 @@ bool Mqtt::unsubscribe(const std::string& topic)
     assert(rcvMsgId == MQTT_EVENT_ANY);
 
     int msgId = esp_mqtt_client_subscribe((esp_mqtt_client_handle_t)mqttClientHandle, tp.get().c_str(), 0);
-    bool result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]{ return rcvMsgId == msgId;});
-    
+    bool result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]
+                                      { return rcvMsgId == msgId; });
+
     rcvMsgId = MQTT_EVENT_ANY;
     rcvEventId = MQTT_EVENT_ANY;
     ESP_LOGD(TAG, "%s %s", __func__, result ? "success" : "fails");
     return result;
 }
 
-void Mqtt::onError(const void* evt)
+void Mqtt::onError(const void *evt)
 {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
     ESP_LOGE(TAG, "MQTT_EVENT_ERROR");
-    if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+    if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
+    {
         ESP_LOGE(TAG, "Last error code reported from esp-tls: 0x%x", event->error_handle->esp_tls_last_esp_err);
         ESP_LOGE(TAG, "Last tls stack error number: 0x%x", event->error_handle->esp_tls_stack_err);
-        ESP_LOGE(TAG, "Last captured errno : %d (%s)",  event->error_handle->esp_transport_sock_errno,
-                    strerror(event->error_handle->esp_transport_sock_errno));
-    } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+        ESP_LOGE(TAG, "Last captured errno : %d (%s)", event->error_handle->esp_transport_sock_errno,
+                 strerror(event->error_handle->esp_transport_sock_errno));
+    }
+    else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED)
+    {
         ESP_LOGE(TAG, "Connection refused error: 0x%x", event->error_handle->connect_return_code);
-    } else {
+    }
+    else
+    {
         ESP_LOGE(TAG, "Unknown error type: 0x%x", event->error_handle->error_type);
     }
 }
 
-void Mqtt::onData(const void* evt)
+void Mqtt::onData(const void *evt)
 {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
     ESP_LOGD(TAG, "TOPIC=%.*s, data Len %d", event->topic_len, event->topic, event->data_len);
     Topic rcvTopic(event->topic, event->topic_len);
-    std::vector<char> data(event->data, event->data+event->data_len);
-    for(const auto& element : filter)
+    std::vector<char> data(event->data, event->data + event->data_len);
+    for (const auto &element : filter)
     {
-        if(element.topic == rcvTopic)
+        if (element.topic == rcvTopic)
         {
             element.callback(rcvTopic, data);
         }
@@ -297,9 +300,9 @@ void Mqtt::onData(const void* evt)
     rcvEventId = MQTT_EVENT_ANY;
 }
 
-void Mqtt::mqttEvtHandler(void* handlerArgs, const char* base, int32_t eventId, void* eventData) noexcept
+void Mqtt::mqttEvtHandler(void *handlerArgs, const char *base, int32_t eventId, void *eventData) noexcept
 {
-    Mqtt& mqtt = *(Mqtt*)handlerArgs;
+    Mqtt &mqtt = *(Mqtt *)handlerArgs;
     ESP_LOGD(TAG, "Event dispatched from event loop base=%s, eventId=%" PRIi32, base, eventId);
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)eventData;
 
@@ -307,7 +310,8 @@ void Mqtt::mqttEvtHandler(void* handlerArgs, const char* base, int32_t eventId, 
     mqtt.rcvEventId = eventId;
     mqtt.rcvMsgId = event->msg_id;
 
-    switch ((esp_mqtt_event_id_t)eventId) {
+    switch ((esp_mqtt_event_id_t)eventId)
+    {
     case MQTT_EVENT_ERROR:
         mqtt.onError(event);
         break;
@@ -352,31 +356,28 @@ void Mqtt::mqttEvtHandler(void* handlerArgs, const char* base, int32_t eventId, 
 // ThingsBoard
 //-------------------------------------------------------------------
 const char *ThingsBoard::TAG = "ThingsBoard";
-ThingsBoard::ThingsBoard(std::string&& uri) :
-    Mqtt(std::move(uri)),
-    attributeReqId(0)
+ThingsBoard::ThingsBoard(std::string &&uri) : Mqtt(std::move(uri)),
+                                              attributeReqId(0)
 {
-
 }
 
 ThingsBoard::~ThingsBoard()
 {
-
 }
 
-bool ThingsBoard::connect(const std::string& user)
+bool ThingsBoard::connect(const std::string &user)
 {
     bool result = Mqtt::connect(user);
-    if(result)
+    if (result)
     {
-        //subscribe("v1/devices/me/attributes", [](const Topic& topic, const std::vector<char>& data){
-        //        ESP_LOGD(TAG, "topic[%s] data[%s]", topic.get().c_str(), data.data());
-        //    });
+        // subscribe("v1/devices/me/attributes", [](const Topic& topic, const std::vector<char>& data){
+        //         ESP_LOGD(TAG, "topic[%s] data[%s]", topic.get().c_str(), data.data());
+        //     });
     }
     return result;
 }
 
-ArduinoJson::JsonDocument ThingsBoard::request(Topic&& pubTopic, Topic&& subTopic, const ArduinoJson::JsonDocument& data)
+ArduinoJson::JsonDocument ThingsBoard::request(Topic &&pubTopic, Topic &&subTopic, const ArduinoJson::JsonDocument &data)
 {
     struct Sync
     {
@@ -392,32 +393,34 @@ ArduinoJson::JsonDocument ThingsBoard::request(Topic&& pubTopic, Topic&& subTopi
     std::unique_lock uk(sync.mutex);
     ArduinoJson::JsonDocument doc;
 
-    bool result = subscribe(subTopic.get(), [&sync, &doc](const Topic& topic, const std::vector<char>& data){
+    bool result = subscribe(subTopic.get(), [&sync, &doc](const Topic &topic, const std::vector<char> &data)
+                            {
         std::unique_lock uk(sync.mutex);
         ArduinoJson::DeserializationError error = ArduinoJson::deserializeJson(doc, data);
         ESP_LOGI(TAG, "%s: rcv[%s]", __func__, data.data());
         uk.unlock();
-        sync.cv.notify_one();
-    });
+        sync.cv.notify_one(); });
 
-    if(result)
+    if (result)
     {
         result = publish(pubTopic.get(), json);
     }
-    if(result)
+    if (result)
     {
-        sync.cv.wait_for(uk, std::chrono::seconds(4), [&doc]{ return not doc.isNull(); });
+        sync.cv.wait_for(uk, std::chrono::seconds(4), [&doc]
+                         { return not doc.isNull(); });
     }
 
     unsubscribe(subTopic.get());
     return doc;
 }
 
-std::string ThingsBoard::provision(const std::string& deviceName, const std::string& devKey, const std::string& devSec)
+std::string ThingsBoard::provision(const std::string &deviceName, const std::string &devKey, const std::string &devSec)
 {
     ESP_LOGI(TAG, "%s", __func__);
     // Connect to the ThingsBoard server as a client wanting to provision a new device
-    if (!Mqtt::connect("provision")) {
+    if (!Mqtt::connect("provision"))
+    {
         ESP_LOGE(TAG, "Failed to connect to ThingsBoard server with provision account");
         return std::string();
     }
@@ -427,7 +430,7 @@ std::string ThingsBoard::provision(const std::string& deviceName, const std::str
     doc["deviceName"] = deviceName;
     doc = request(Topic("/provision/request"), Topic("#"), doc);
 
-    ESP_LOGI(TAG, "Rcv toekn: %s",  std::string(doc["credentialsValue"]).c_str());
+    ESP_LOGI(TAG, "Rcv toekn: %s", std::string(doc["credentialsValue"]).c_str());
     Mqtt::disConnect();
     return std::string(doc["credentialsValue"]);
 }
@@ -450,100 +453,108 @@ void ThingsBoard::firmwareUpdate()
     std::string ver = std::string(doc["shared"]["fw_version"]);
     Version rcvVer(ver.c_str());
 
-    if(not rcvVer.isHigherVersion())
+    if (not rcvVer.isHigherVersion())
     {
         ESP_LOGI(TAG, "Cannot find new verion server{%s}, current{%s}:", rcvVer.get().c_str(), Version::getCurrentSWVer().get().c_str());
         return;
     }
-
-    const uint32_t fwSize = doc["shared"]["fw_size"];
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::unique_lock uk(mutex);
-    volatile bool rcv = false;
-    //tb.publish("v1/devices/me/telemetry", "{'current_fw_title': 'Test', 'current_fw_version': '0'}");
-    uint32_t rcvSize = 0;
-    int reqId = 0;
-    int currentChunk = 0;
-    bool result = false;
-
     const esp_partition_t *configured = esp_ota_get_boot_partition();
     const esp_partition_t *running = esp_ota_get_running_partition();
 
-    if (configured != running) {
-        ESP_LOGW(TAG, "Configured OTA boot partition at offset 0x%08"PRIx32", but running from offset 0x%08"PRIx32,
+    if (configured != running)
+    {
+        ESP_LOGW(TAG, "Configured OTA boot partition at offset 0x%08" PRIx32 ", but running from offset 0x%08" PRIx32,
                  configured->address, running->address);
         ESP_LOGW(TAG, "(This can happen if either the OTA boot data or preferred boot image become corrupted somehow.)");
     }
-    ESP_LOGI(TAG, "Running partition type %d subtype %d (offset 0x%08"PRIx32")",
+    ESP_LOGI(TAG, "Running partition type %d subtype %d (offset 0x%08" PRIx32 ")",
              running->type, running->subtype, running->address);
 
     esp_app_desc_t running_app_info;
-    if (esp_ota_get_partition_description(running, &running_app_info) == ESP_OK) {
+    if (esp_ota_get_partition_description(running, &running_app_info) == ESP_OK)
+    {
         ESP_LOGI(TAG, "Running firmware version: %s", running_app_info.version);
     }
 
-    const esp_partition_t* last_invalid_app = esp_ota_get_last_invalid_partition();
+    const esp_partition_t *last_invalid_app = esp_ota_get_last_invalid_partition();
     esp_app_desc_t invalid_app_info;
-    if (esp_ota_get_partition_description(last_invalid_app, &invalid_app_info) == ESP_OK) {
+    if (esp_ota_get_partition_description(last_invalid_app, &invalid_app_info) == ESP_OK)
+    {
         ESP_LOGI(TAG, "Last invalid firmware version: %s", invalid_app_info.version);
     }
     esp_err_t err;
-    esp_ota_handle_t update_handle = 0 ;
-    const esp_partition_t* update_partition = esp_ota_get_next_update_partition(NULL);
-    ESP_LOGI(TAG, "Writing to partition subtype %d at offset 0x%"PRIx32,
+    const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
+    ESP_LOGI(TAG, "Writing to partition subtype %d at offset 0x%" PRIx32,
              update_partition->subtype, update_partition->address);
-    err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &update_handle);
-
-    subscribe("v2/fw/response/+", 
-        [&mutex, &cv, &rcv, &rcvSize, &update_handle](const Topic& topic, const std::vector<char>& data)
+    
+    struct Sync
+    {
+        std::mutex mutex;
+        std::condition_variable cv;
+        uint32_t rcvSize = 0;
+        esp_ota_handle_t update_handle = 0;
+        int currentChunk = 0;
+    };
+    Sync sync;
+    err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &sync.update_handle);
+    std::unique_lock uk(sync.mutex);
+    int reqId = 0;
+    bool result = false;
+    const uint32_t fwSize = doc["shared"]["fw_size"];
+    subscribe("v2/fw/response/+",
+        [&sync](const Topic &topic, const std::vector<char> &data)
         {
-            std::unique_lock uk(mutex);
-            esp_err_t err = esp_ota_write( update_handle, (const void *)data.data(), data.size());
-            rcvSize += data.size();
-            if(err == ESP_OK)
-            {
-                rcv = true;
-            }
+            std::unique_lock uk(sync.mutex);
+            esp_err_t err = esp_ota_write(sync.update_handle, (const void *)data.data(), data.size());
+            sync.rcvSize += data.size();
+            sync.currentChunk++;
             uk.unlock();
-            cv.notify_one();
+            sync.cv.notify_one();
         });
     do
     {
         char buf[300]{};
-        snprintf(buf, 300, "v2/fw/request/%d/chunk/%d", reqId, currentChunk);
+        int reqChunk = sync.currentChunk;
+        snprintf(buf, 300, "v2/fw/request/%d/chunk/%d", reqId, sync.currentChunk);
         publish(buf, std::to_string(chunkSize));
-        result = cv.wait_for(uk, std::chrono::seconds(4), [&rcv]{return rcv;});
-        if(rcvSize % (100 * 1024) == 0)
+        result = sync.cv.wait_for(uk, std::chrono::seconds(4), 
+            [&sync, &reqChunk]
+            {
+                return sync.currentChunk > reqChunk;
+            });
+        if (sync.rcvSize % (100 * 1024) == 0)
         {
-            ESP_LOGI(TAG, "RcvSize %d chunkSize %d", (int)rcvSize, (int)chunkSize);
+            ESP_LOGI(TAG, "RcvSize %d chunkSize %d", (int)sync.rcvSize, (int)chunkSize);
         }
-        rcv = false;
-        currentChunk+=1;
-    } while (rcvSize < fwSize and result);
+    } while (sync.rcvSize < fwSize and result);
 
-    ESP_LOGI(TAG, "%s %s fwSize: %d, rcvSize: %d", __func__, result ? "success" : "fails", (int)fwSize, (int)rcvSize);
+    ESP_LOGI(TAG, "%s %s fwSize: %d, rcvSize: %d", __func__, result ? "success" : "fails", (int)fwSize, (int)sync.rcvSize);
 
-    if(result)
-    {    
-        err = esp_ota_end(update_handle);
-        if (err != ESP_OK) {
-            if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
+    if (result)
+    {
+        err = esp_ota_end(sync.update_handle);
+        if (err != ESP_OK)
+        {
+            if (err == ESP_ERR_OTA_VALIDATE_FAILED)
+            {
                 ESP_LOGE(TAG, "Image validation failed, image is corrupted");
-            } else {
+            }
+            else
+            {
                 ESP_LOGE(TAG, "esp_ota_end failed (%s)!", esp_err_to_name(err));
             }
             return;
         }
     }
     err = esp_ota_set_boot_partition(update_partition);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         ESP_LOGE(TAG, "esp_ota_set_boot_partition failed (%s)!", esp_err_to_name(err));
     }
     esp_restart();
 }
 
-ArduinoJson::JsonDocument ThingsBoard::requestAttributes(const ArduinoJson::JsonDocument& doc)
+ArduinoJson::JsonDocument ThingsBoard::requestAttributes(const ArduinoJson::JsonDocument &doc)
 {
     const int id = attributeReqId++;
     Topic pubTopic(std::string("v1/devices/me/attributes/request/") + std::to_string(id));
@@ -553,7 +564,7 @@ ArduinoJson::JsonDocument ThingsBoard::requestAttributes(const ArduinoJson::Json
     return _doc;
 }
 
-bool ThingsBoard::sendTelemetry(const ArduinoJson::JsonDocument& doc)
+bool ThingsBoard::sendTelemetry(const ArduinoJson::JsonDocument &doc)
 {
     std::string json;
     ArduinoJson::serializeJson(doc, json);

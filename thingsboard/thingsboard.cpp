@@ -58,6 +58,12 @@ Topic::Topic(const char* topic) :
 {
 }
 
+Topic::Topic(std::string&& topic) :
+    Topic(topic.c_str(), topic.size())
+{
+
+}
+
 Topic::~Topic()
 {
     
@@ -232,13 +238,15 @@ bool Mqtt::unsubscribe(const std::string& topic)
 {
     Topic tp(topic.c_str());
     std::unique_lock uk(flowCtrlMutex);
+
     auto it = std::find_if(filter.begin(), filter.end(), [&tp](const auto& element){
         return element.topic == tp;
     });
-    if(it != filter.end())
+    if(it == filter.end())
     {
-        filter.erase(it);
+        return true;
     }
+    filter.erase(it);
     ESP_LOGD(TAG, "%s %s", __func__, tp.get().c_str());
     if(tp.get().compare("#") == 0)
     {
@@ -259,16 +267,16 @@ bool Mqtt::unsubscribe(const std::string& topic)
 void Mqtt::onError(const void* evt)
 {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)evt;
-    ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
+    ESP_LOGE(TAG, "MQTT_EVENT_ERROR");
     if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
-        ESP_LOGI(TAG, "Last error code reported from esp-tls: 0x%x", event->error_handle->esp_tls_last_esp_err);
-        ESP_LOGI(TAG, "Last tls stack error number: 0x%x", event->error_handle->esp_tls_stack_err);
-        ESP_LOGI(TAG, "Last captured errno : %d (%s)",  event->error_handle->esp_transport_sock_errno,
+        ESP_LOGE(TAG, "Last error code reported from esp-tls: 0x%x", event->error_handle->esp_tls_last_esp_err);
+        ESP_LOGE(TAG, "Last tls stack error number: 0x%x", event->error_handle->esp_tls_stack_err);
+        ESP_LOGE(TAG, "Last captured errno : %d (%s)",  event->error_handle->esp_transport_sock_errno,
                     strerror(event->error_handle->esp_transport_sock_errno));
     } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
-        ESP_LOGI(TAG, "Connection refused error: 0x%x", event->error_handle->connect_return_code);
+        ESP_LOGE(TAG, "Connection refused error: 0x%x", event->error_handle->connect_return_code);
     } else {
-        ESP_LOGW(TAG, "Unknown error type: 0x%x", event->error_handle->error_type);
+        ESP_LOGE(TAG, "Unknown error type: 0x%x", event->error_handle->error_type);
     }
 }
 
@@ -282,7 +290,7 @@ void Mqtt::onData(const void* evt)
     {
         if(element.topic == rcvTopic)
         {
-            element.callback(rcvTopic.get(), data);
+            element.callback(rcvTopic, data);
         }
     }
     rcvMsgId = MQTT_EVENT_ANY;
@@ -361,11 +369,48 @@ bool ThingsBoard::connect(const std::string& user)
     bool result = Mqtt::connect(user);
     if(result)
     {
-        subscribe("v1/devices/me/attributes", [](const std::string& topic, const std::vector<char>& data){
-                ESP_LOGD(TAG, "topic[%s] data[%s]", topic.c_str(), data.data());
-            });
+        //subscribe("v1/devices/me/attributes", [](const Topic& topic, const std::vector<char>& data){
+        //        ESP_LOGD(TAG, "topic[%s] data[%s]", topic.get().c_str(), data.data());
+        //    });
     }
-    return true;
+    return result;
+}
+
+ArduinoJson::JsonDocument ThingsBoard::request(Topic&& pubTopic, Topic&& subTopic, const ArduinoJson::JsonDocument& data)
+{
+    struct Sync
+    {
+        std::mutex mutex;
+        std::condition_variable cv;
+    };
+    Sync sync;
+
+    std::string json;
+    ArduinoJson::serializeJson(data, json);
+
+    ESP_LOGI(TAG, "%s: reqTopic[%s] rcvTopic[%s] data[%s]", __func__, subTopic.get().c_str(), pubTopic.get().c_str(), json.c_str());
+    std::unique_lock uk(sync.mutex);
+    ArduinoJson::JsonDocument doc;
+
+    bool result = subscribe(subTopic.get(), [&sync, &doc](const Topic& topic, const std::vector<char>& data){
+        std::unique_lock uk(sync.mutex);
+        ArduinoJson::DeserializationError error = ArduinoJson::deserializeJson(doc, data);
+        ESP_LOGI(TAG, "%s: rcv[%s]", __func__, data.data());
+        uk.unlock();
+        sync.cv.notify_one();
+    });
+
+    if(result)
+    {
+        result = publish(pubTopic.get(), json);
+    }
+    if(result)
+    {
+        sync.cv.wait_for(uk, std::chrono::seconds(4), [&doc]{ return not doc.isNull(); });
+    }
+
+    unsubscribe(subTopic.get());
+    return doc;
 }
 
 std::string ThingsBoard::provision(const std::string& deviceName, const std::string& devKey, const std::string& devSec)
@@ -376,73 +421,25 @@ std::string ThingsBoard::provision(const std::string& deviceName, const std::str
         ESP_LOGE(TAG, "Failed to connect to ThingsBoard server with provision account");
         return std::string();
     }
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::unique_lock uk(mutex);
-    volatile bool rcv = false;
-    std::string token;
-    bool success = subscribe("#", [&mutex, &cv, &token, &rcv](const std::string& topic, const std::vector<char>& data)
-        {    
-            std::unique_lock uk(mutex);
-            token = std::string(data.begin(), data.end());
-            ESP_LOGI(TAG, "topic[%s] data[%s]", topic.c_str(), token.c_str());
-            rcv = true;
-            uk.unlock();
-            cv.notify_one();
-        });
-    if(success)
-    {
-        char buff[300];
-        snprintf(buff, sizeof(buff), "{'provisionDeviceKey': '%s', 'provisionDeviceSecret': '%s', 'deviceName': '%s'}", devKey.c_str(), devSec.c_str(), deviceName.c_str());
-        ESP_LOGI(TAG, "%s", buff);
-        publish("/provision/request", buff);
-        bool result = cv.wait_for(uk, std::chrono::seconds(4), [&rcv]{return rcv;});
-        if(result)
-        {
-            ArduinoJson::JsonDocument doc;
-            ArduinoJson::DeserializationError error = ArduinoJson::deserializeJson(doc, token.c_str());
-            if(error) 
-            {
-                ESP_LOGI(TAG, "deserializeJson() failed: %s", error.c_str());
-            }
-            else
-            {
-                token = std::string(doc["credentialsValue"]);
-            }
-        }
-        ESP_LOGI(TAG, "Token [%s]", token.c_str());
-        unsubscribe("#");
-    }
+    ArduinoJson::JsonDocument doc;
+    doc["provisionDeviceKey"] = devKey;
+    doc["provisionDeviceSecret"] = devSec;
+    doc["deviceName"] = deviceName;
+    doc = request(Topic("/provision/request"), Topic("#"), doc);
+
+    ESP_LOGI(TAG, "Rcv toekn: %s",  std::string(doc["credentialsValue"]).c_str());
     Mqtt::disConnect();
-    return token;
+    return std::string(doc["credentialsValue"]);
 }
 
-ArduinoJson::JsonDocument ThingsBoard::requestAttributes(const std::string& data)
+ArduinoJson::JsonDocument ThingsBoard::requestAttributes(const ArduinoJson::JsonDocument& doc)
 {
-    const char* reqTopic = "v1/devices/me/attributes/request/%lu";
-    const char* resTopic = "v1/devices/me/attributes/response/+";
-    
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::unique_lock uk(mutex);
-    attributeReqId += 1;
-    ArduinoJson::JsonDocument doc;
-    subscribe(resTopic, [&mutex, &cv, &doc](const std::string& topic, const std::vector<char>& data){
-            std::unique_lock uk(mutex);
-            ArduinoJson::DeserializationError error = ArduinoJson::deserializeJson(doc, data);
-            uk.unlock();
-            cv.notify_one();
-        });
-
-    char buf[300]{};
-    snprintf(buf, 300, reqTopic, attributeReqId);
-    publish(buf, data);
-
-    bool result = cv.wait_for(uk, std::chrono::seconds(4), [&doc]{return not doc.isNull();});
-    
-    unsubscribe(resTopic);
-    ESP_LOGD(TAG, "%s %s", __func__, result ? "success" : "fails");
-    return doc;
+    const int id = attributeReqId++;
+    Topic pubTopic(std::string("v1/devices/me/attributes/request/") + std::to_string(id));
+    Topic subTopic("v1/devices/me/attributes/response/+");
+    ArduinoJson::JsonDocument _doc = request(std::move(pubTopic), std::move(subTopic), doc);
+    ESP_LOGD(TAG, "%s %s", __func__, _doc.isNull() ? "fails" : "success");
+    return _doc;
 }
 
 void ThingsBoard::firmwareUpdate()
@@ -450,7 +447,10 @@ void ThingsBoard::firmwareUpdate()
     constexpr uint32_t chunkSize = 512;
     ESP_LOGD(TAG, "%s", __func__);
 
-    ArduinoJson::JsonDocument doc = requestAttributes(std::string("{'sharedKeys': 'fw_checksum,fw_checksum_algorithm,fw_size,fw_title,fw_version'}"));
+    ArduinoJson::JsonDocument doc;
+    doc["sharedKeys"] = "fw_checksum,fw_checksum_algorithm,fw_size,fw_title,fw_version";
+    doc = requestAttributes(doc);
+
     ESP_LOGI(TAG, "fw_title: %s", std::string(doc["shared"]["fw_title"]).c_str());
     ESP_LOGI(TAG, "fw_size: %s", std::string(doc["shared"]["fw_size"]).c_str());
     ESP_LOGI(TAG, "fw_version: %s", std::string(doc["shared"]["fw_version"]).c_str());
@@ -506,7 +506,7 @@ void ThingsBoard::firmwareUpdate()
     err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &update_handle);
 
     subscribe("v2/fw/response/+", 
-        [&mutex, &cv, &rcv, &rcvSize, &update_handle](const std::string& topic, const std::vector<char>& data)
+        [&mutex, &cv, &rcv, &rcvSize, &update_handle](const Topic& topic, const std::vector<char>& data)
         {
             std::unique_lock uk(mutex);
             esp_err_t err = esp_ota_write( update_handle, (const void *)data.data(), data.size());

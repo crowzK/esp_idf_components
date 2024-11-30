@@ -13,6 +13,7 @@ class Topic
 {
 public:
     Topic(const char* topic);
+    Topic(std::string&& topic);
     Topic(const char* topic, uint32_t strLen);
     ~Topic();
 
@@ -26,7 +27,7 @@ protected:
 class Mqtt
 {
 public:
-    using SubscribeCallback = std::function<void(const std::string& topic, const std::vector<char>& data)>;
+    using SubscribeCallback = std::function<void(const Topic& topic, const std::vector<char>& data)>;
     Mqtt(std::string&& uri);
     ~Mqtt();
 
@@ -70,14 +71,15 @@ class ThingsBoard : public Mqtt
 public:
     ThingsBoard(std::string&& uri);
     ~ThingsBoard();
+    ArduinoJson::JsonDocument request(Topic&& publish, Topic&& subscribe, const ArduinoJson::JsonDocument& data);
     bool connect(const std::string& user) override;
     std::string provision(const std::string& deviceName, const std::string& devKey, const std::string& devSec);
     void firmwareUpdate();
-    ArduinoJson::JsonDocument requestAttributes(const std::string& data);
+    ArduinoJson::JsonDocument requestAttributes(const ArduinoJson::JsonDocument& doc);
 
 protected:
     static const char *TAG;
     std::mutex evtMutex;
     std::condition_variable evtCv;
-    uint32_t attributeReqId;
+    std::atomic<int> attributeReqId;
 };

@@ -12,10 +12,13 @@ Version::Version(const char* versionStr) :
         {
             version[index] = std::stoi(ver);
             index++;
+            ver = std::string();
             if(index >= 3)
             {
                 break;
             }
+            versionStr += 1;
+            continue;
         }
         ver += *versionStr;
         versionStr += 1;

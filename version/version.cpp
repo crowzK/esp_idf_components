@@ -45,19 +45,27 @@ std::string Version::get() const
 bool Version::isHigherVersion() const
 {
     Version& current = getCurrentSWVer();
-    if(current.version[0] > version[0])
+    if(version[0] > current.version[0])
+    {
+        return true;
+    }
+    else if(version[0] < current.version[0])
     {
         return false;
     }
-    else if(current.version[1] > version[1])
+    else if(version[1] > current.version[1])
+    {
+        return true;
+    }
+    else if(version[1] < current.version[1])
     {
         return false;
     }
-    else if(current.version[2] >= version[2])
+    else if(version[2] > current.version[2])
     {
-        return false;
+        return true;
     }
-    return true;
+    return false;
 }
 
 Version& Version::getCurrentSWVer()

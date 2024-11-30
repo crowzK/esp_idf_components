@@ -12,6 +12,8 @@
 #include <stddef.h>
 #include <string.h>
 #include <chrono>
+#include <fstream>
+#include <filesystem>
 #include "esp_system.h"
 #include "esp_partition.h"
 #include "nvs_flash.h"
@@ -23,6 +25,7 @@
 #include "mqtt_client.h"
 #include "esp_tls.h"
 #include <sys/param.h>
+#include "esp_ota_ops.h"
 
 #include "thingsboard.hpp"
 
@@ -339,73 +342,6 @@ void Mqtt::mqttEvtHandler(void* handlerArgs, const char* base, int32_t eventId, 
 //-------------------------------------------------------------------
 // ThingsBoard
 //-------------------------------------------------------------------
-
-#if 0
-void Cloud::provision()
-{
-    nvs_handle_t handle;
-    ESP_ERROR_CHECK(nvs_open("credentials", NVS_READWRITE, &handle));
-
-    size_t len = 200;
-    char str[len] = {};
-    nvs_get_str(handle, "username", str, &len);
-    if(strlen(str) == 0)
-    {
-        // Send a claiming request without any device name (random string will be used as the device name)
-        // if the string is empty or null, automatically checked by the sendProvisionRequest method
-        std::string device_name;
-
-        // Check if passed DEVICE_NAME was empty,
-        // and if it was get the mac address of the wifi chip as fallback and use that one instead
-        uint8_t mac[6];
-        esp_wifi_get_mac(WIFI_IF_STA, mac);
-        char mac_str[18];
-        snprintf(mac_str, 18U, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        device_name = mac_str;
-
-        ESP_LOGI(TAG, "connect");
-        // Connect to the ThingsBoard server as a client wanting to provision a new device
-        if (!tb.connect("iot.crowz.kr", "provision", 8883)) {
-            ESP_LOGE(TAG, "Failed to connect to ThingsBoard server with provision account");
-            return;
-        }
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-
-        // Prepare and send the provision request
-        const Provision_Callback provisionCallback(Access_Token(), &processProvisionResponse, PROVISION_DEVICE_KEY, PROVISION_DEVICE_SECRET, device_name.c_str(), REQUEST_TIMEOUT_MICROSECONDS, &requestTimedOut);
-        provisionRequestSent = prov.Provision_Request(provisionCallback);
-
-        // Wait for the provisioning response to be processed
-        while (!provisionResponseProcessed) {
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-        }
-
-        // Disconnect from the cloud client connected to the provision account
-        // because the device has been provisioned and can reconnect with new credentials
-        if (tb.connected()) {
-            tb.disconnect();
-        }
-        nvs_set_str(handle, "client_id", credentials.client_id.c_str());
-        nvs_set_str(handle, "username", credentials.username.c_str());
-        nvs_set_str(handle, "password", credentials.password.c_str());
-    }
-    else
-    {
-        credentials.username = std::string(str);
-        nvs_get_str(handle, "client_id", str, &len);
-        credentials.client_id = std::string(str);
-        nvs_get_str(handle, "password", str, &len);
-        credentials.password = std::string(str);
-    }
-    nvs_close(handle);
-
-    ESP_LOGI(TAG, "connect");
-    // Connect to the ThingsBoard server, as the provisioned client
-    tb.connect(THINGSBOARD_SERVER, credentials.username.c_str(), THINGSBOARD_PORT, credentials.client_id.c_str(), credentials.password.c_str());
-    serverVersionCheck();
-}
-#endif
-
 const char *ThingsBoard::TAG = "ThingsBoard";
 ThingsBoard::ThingsBoard(std::string&& uri) :
     Mqtt(std::move(uri)),
@@ -433,7 +369,7 @@ bool ThingsBoard::connect(const std::string& user)
 
 std::string ThingsBoard::provision(const std::string& deviceName, const std::string& devKey, const std::string& devSec)
 {
-    ESP_LOGD(TAG, "%s", __func__);
+    ESP_LOGI(TAG, "%s", __func__);
     // Connect to the ThingsBoard server as a client wanting to provision a new device
     if (!Mqtt::connect("provision")) {
         ESP_LOGE(TAG, "Failed to connect to ThingsBoard server with provision account");
@@ -448,7 +384,7 @@ std::string ThingsBoard::provision(const std::string& deviceName, const std::str
         {    
             std::unique_lock uk(mutex);
             token = std::string(data.begin(), data.end());
-            ESP_LOGD(TAG, "topic[%s] data[%s]", topic.c_str(), token.c_str());
+            ESP_LOGI(TAG, "topic[%s] data[%s]", topic.c_str(), token.c_str());
             rcv = true;
             uk.unlock();
             cv.notify_one();
@@ -457,7 +393,7 @@ std::string ThingsBoard::provision(const std::string& deviceName, const std::str
     {
         char buff[300];
         snprintf(buff, sizeof(buff), "{'provisionDeviceKey': '%s', 'provisionDeviceSecret': '%s', 'deviceName': '%s'}", devKey.c_str(), devSec.c_str(), deviceName.c_str());
-        ESP_LOGD(TAG, "%s", buff);
+        ESP_LOGI(TAG, "%s", buff);
         publish("/provision/request", buff);
         bool result = cv.wait_for(uk, std::chrono::seconds(4), [&rcv]{return rcv;});
         if(result)
@@ -529,28 +465,80 @@ void ThingsBoard::firmwareUpdate()
     uint32_t rcvSize = 0;
     int reqId = 0;
     int currentChunk = 0;
-    
+    bool result = false;
+
+    const esp_partition_t *configured = esp_ota_get_boot_partition();
+    const esp_partition_t *running = esp_ota_get_running_partition();
+
+    if (configured != running) {
+        ESP_LOGW(TAG, "Configured OTA boot partition at offset 0x%08"PRIx32", but running from offset 0x%08"PRIx32,
+                 configured->address, running->address);
+        ESP_LOGW(TAG, "(This can happen if either the OTA boot data or preferred boot image become corrupted somehow.)");
+    }
+    ESP_LOGI(TAG, "Running partition type %d subtype %d (offset 0x%08"PRIx32")",
+             running->type, running->subtype, running->address);
+
+    esp_app_desc_t running_app_info;
+    if (esp_ota_get_partition_description(running, &running_app_info) == ESP_OK) {
+        ESP_LOGI(TAG, "Running firmware version: %s", running_app_info.version);
+    }
+
+    const esp_partition_t* last_invalid_app = esp_ota_get_last_invalid_partition();
+    esp_app_desc_t invalid_app_info;
+    if (esp_ota_get_partition_description(last_invalid_app, &invalid_app_info) == ESP_OK) {
+        ESP_LOGI(TAG, "Last invalid firmware version: %s", invalid_app_info.version);
+    }
+    esp_err_t err;
+    esp_ota_handle_t update_handle = 0 ;
+    const esp_partition_t* update_partition = esp_ota_get_next_update_partition(NULL);
+    ESP_LOGI(TAG, "Writing to partition subtype %d at offset 0x%"PRIx32,
+             update_partition->subtype, update_partition->address);
+    err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &update_handle);
+
     subscribe("v2/fw/response/+", 
-        [&mutex, &cv, &rcv, &rcvSize](const std::string& topic, const std::vector<char>& data)
+        [&mutex, &cv, &rcv, &rcvSize, &update_handle](const std::string& topic, const std::vector<char>& data)
         {
             std::unique_lock uk(mutex);
-            rcv = true;
+            esp_err_t err = esp_ota_write( update_handle, (const void *)data.data(), data.size());
             rcvSize += data.size();
+            if(err == ESP_OK)
+            {
+                rcv = true;
+            }
             uk.unlock();
             cv.notify_one();
         });
-    bool result = false;
     do
     {
         char buf[300]{};
         snprintf(buf, 300, "v2/fw/request/%d/chunk/%d", reqId, currentChunk);
-        uint32_t _chunkSize = std::min(chunkSize, fwSize-rcvSize);
-        publish(buf, std::to_string(_chunkSize));
+        publish(buf, std::to_string(chunkSize));
         result = cv.wait_for(uk, std::chrono::seconds(4), [&rcv]{return rcv;});
-        ESP_LOGI(TAG, "RcvSize %d chunkSize %d", (int)rcvSize, (int)_chunkSize);
+        if(rcvSize % (100 * 1024) == 0)
+        {
+            ESP_LOGI(TAG, "RcvSize %d chunkSize %d", (int)rcvSize, (int)chunkSize);
+        }
         rcv = false;
         currentChunk+=1;
     } while (rcvSize < fwSize and result);
 
-    ESP_LOGI(TAG, "%s %s", __func__, result ? "success" : "fails");
+    ESP_LOGI(TAG, "%s %s fwSize: %d, rcvSize: %d", __func__, result ? "success" : "fails", (int)fwSize, (int)rcvSize);
+
+    if(result)
+    {    
+        err = esp_ota_end(update_handle);
+        if (err != ESP_OK) {
+            if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
+                ESP_LOGE(TAG, "Image validation failed, image is corrupted");
+            } else {
+                ESP_LOGE(TAG, "esp_ota_end failed (%s)!", esp_err_to_name(err));
+            }
+            return;
+        }
+    }
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed (%s)!", esp_err_to_name(err));
+    }
+    esp_restart();
 }

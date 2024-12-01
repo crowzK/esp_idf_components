@@ -4,6 +4,7 @@
 #include <string>
 #include <mutex>
 #include <vector>
+#include <list>
 #include <map>
 #include <atomic>
 #include <condition_variable>
@@ -38,8 +39,6 @@ public:
     bool unsubscribe(const std::string& topic);
 
 protected:
-    std::recursive_mutex transactionMutex;
-
     virtual void onError(const void* evt);
     virtual void onData(const void* evt);
 
@@ -52,19 +51,34 @@ protected:
 
 private:
     static const char *TAG;
+    using EventCallback = std::function<void(void* eventData)>;
+    class EventHandle
+    {
+    public:
+        Mqtt& mqtt;
+        int eventId;
+        std::mutex mutex;
+        std::condition_variable cv;
+        EventCallback callback;
+
+        EventHandle(Mqtt& mqtt, int eventId, EventCallback&& callback);
+        ~EventHandle();
+    };
     struct Filter
     {
         Topic topic;
         SubscribeCallback callback;
     };
+    std::mutex mutex;
     const std::string uri;
-    volatile int32_t rcvEventId;
-    volatile int32_t rcvMsgId;
     volatile bool connected;
-    std::mutex flowCtrlMutex;
-    std::condition_variable flowCtrlCv;
     void* mqttClientHandle;
     std::vector<Filter> filter;
+    std::list<const EventHandle*> evtHandles;
+
+    void registerEventHandle(const EventHandle& handle);
+    void unRegisterEventHandle(const EventHandle& handle);
+
     static void mqttEvtHandler(void* handlerArgs, const char* base, int32_t eventId, void* eventData) noexcept;
 };
 

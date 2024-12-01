@@ -20,7 +20,7 @@ public:
     const std::string get() const;
     bool operator==(const Topic& obj) const;
 
-protected:
+//protected:
     std::vector<std::string> strs;
 };
 
@@ -38,6 +38,8 @@ public:
     bool unsubscribe(const std::string& topic);
 
 protected:
+    std::recursive_mutex transactionMutex;
+
     virtual void onError(const void* evt);
     virtual void onData(const void* evt);
 
@@ -69,6 +71,7 @@ private:
 class ThingsBoard : public Mqtt
 {
 public:
+    using RpcCallback = std::function<void(int reqId, const ArduinoJson::JsonDocument& doc)>;
     ThingsBoard(std::string&& uri);
     ~ThingsBoard();
     ArduinoJson::JsonDocument request(Topic&& publish, Topic&& subscribe, const ArduinoJson::JsonDocument& data);
@@ -78,9 +81,18 @@ public:
     ArduinoJson::JsonDocument requestAttributes(const ArduinoJson::JsonDocument& doc);
     bool sendTelemetry(const ArduinoJson::JsonDocument& doc);
 
+    bool registerRpcCallback(const std::string& function, RpcCallback&& callback);
+
 protected:
     static const char *TAG;
+    struct RpcFilter
+    {
+        std::string function;
+        RpcCallback callback;
+    };
     std::mutex evtMutex;
     std::condition_variable evtCv;
     std::atomic<int> attributeReqId;
+    std::mutex rpcMutex;
+    std::vector<RpcFilter> rpcFilter;
 };

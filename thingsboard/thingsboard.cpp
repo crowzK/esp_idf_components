@@ -29,6 +29,7 @@
 
 #include "thingsboard.hpp"
 #include "version.hpp"
+#include "work_queue.hpp"
 
 //-------------------------------------------------------------------
 // Topic
@@ -129,7 +130,8 @@ Mqtt::~Mqtt()
 
 bool Mqtt::connect(const std::string &user)
 {
-    std::unique_lock uk(flowCtrlMutex);
+    std::lock_guard lk(transactionMutex);
+
     assert(rcvEventId == MQTT_EVENT_ANY);
     assert(rcvMsgId == MQTT_EVENT_ANY);
     if (connected == true)
@@ -154,6 +156,7 @@ bool Mqtt::connect(const std::string &user)
     bool success = esp_mqtt_client_start((esp_mqtt_client_handle_t)mqttClientHandle) == ESP_OK;
     if (success)
     {
+        std::unique_lock uk(flowCtrlMutex);
         success = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this]
                                       { return rcvEventId == MQTT_EVENT_CONNECTED; });
     }
@@ -167,7 +170,8 @@ bool Mqtt::connect(const std::string &user)
 
 bool Mqtt::disConnect()
 {
-    std::unique_lock uk(flowCtrlMutex);
+    std::lock_guard lk(transactionMutex);
+
     assert(rcvEventId == MQTT_EVENT_ANY);
     assert(rcvMsgId == MQTT_EVENT_ANY);
     if (connected == false)
@@ -177,6 +181,7 @@ bool Mqtt::disConnect()
     bool success = esp_mqtt_client_stop((esp_mqtt_client_handle_t)mqttClientHandle) == ESP_OK;
     if (success)
     {
+        std::unique_lock uk(flowCtrlMutex);
         success = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this]
                                       { return rcvEventId == MQTT_EVENT_DISCONNECTED; });
     }
@@ -191,30 +196,34 @@ bool Mqtt::disConnect()
 bool Mqtt::publish(const std::string &topic, const std::string &data)
 {
     int qos = 0;
-    std::unique_lock uk(flowCtrlMutex);
+    ESP_LOGD(TAG, "%s", __func__);
+    std::lock_guard lk(transactionMutex);
+    
     assert(rcvEventId == MQTT_EVENT_ANY);
     assert(rcvMsgId == MQTT_EVENT_ANY);
 
     int msgId = esp_mqtt_client_publish((esp_mqtt_client_handle_t)mqttClientHandle, topic.c_str(), data.c_str(), 0, qos, 0);
-    ESP_LOGD(TAG, "%s msgId %d", __func__, msgId);
     bool result = msgId == 0;
     if (qos > 0)
     {
+        std::unique_lock uk(flowCtrlMutex);
         result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]
                                      { return rcvMsgId == msgId; });
     }
 
     rcvMsgId = MQTT_EVENT_ANY;
     rcvEventId = MQTT_EVENT_ANY;
+    ESP_LOGD(TAG, "%s %s", __func__, result ? "success" : "fails");
     return result;
 }
 
 bool Mqtt::subscribe(const std::string &topic, SubscribeCallback &&callback)
 {
     Topic tp(topic.c_str());
-    std::unique_lock uk(flowCtrlMutex);
-    filter.emplace_back(Filter{std::move(tp), std::move(callback)});
     ESP_LOGD(TAG, "%s %s", __func__, tp.get().c_str());
+    std::lock_guard lk(transactionMutex);
+    
+    filter.emplace_back(Filter{std::move(tp), std::move(callback)});
     if (tp.get().compare("#") == 0)
     {
         return true;
@@ -223,6 +232,7 @@ bool Mqtt::subscribe(const std::string &topic, SubscribeCallback &&callback)
     assert(rcvMsgId == MQTT_EVENT_ANY);
 
     int msgId = esp_mqtt_client_subscribe((esp_mqtt_client_handle_t)mqttClientHandle, tp.get().c_str(), 0);
+    std::unique_lock uk(flowCtrlMutex);
     bool result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]
                                       { return rcvMsgId == msgId; });
 
@@ -235,7 +245,9 @@ bool Mqtt::subscribe(const std::string &topic, SubscribeCallback &&callback)
 bool Mqtt::unsubscribe(const std::string &topic)
 {
     Topic tp(topic.c_str());
-    std::unique_lock uk(flowCtrlMutex);
+    ESP_LOGD(TAG, "%s %s", __func__, tp.get().c_str());
+    std::lock_guard lk(transactionMutex);
+    
 
     auto it = std::find_if(filter.begin(), filter.end(), [&tp](const auto &element)
                            { return element.topic == tp; });
@@ -244,7 +256,6 @@ bool Mqtt::unsubscribe(const std::string &topic)
         return true;
     }
     filter.erase(it);
-    ESP_LOGD(TAG, "%s %s", __func__, tp.get().c_str());
     if (tp.get().compare("#") == 0)
     {
         return true;
@@ -253,6 +264,7 @@ bool Mqtt::unsubscribe(const std::string &topic)
     assert(rcvMsgId == MQTT_EVENT_ANY);
 
     int msgId = esp_mqtt_client_subscribe((esp_mqtt_client_handle_t)mqttClientHandle, tp.get().c_str(), 0);
+    std::unique_lock uk(flowCtrlMutex);
     bool result = flowCtrlCv.wait_for(uk, std::chrono::seconds(4), [this, msgId]
                                       { return rcvMsgId == msgId; });
 
@@ -349,7 +361,7 @@ void Mqtt::mqttEvtHandler(void *handlerArgs, const char *base, int32_t eventId, 
     }
 
     uk.unlock();
-    mqtt.flowCtrlCv.notify_one();
+    mqtt.flowCtrlCv.notify_all();
 }
 
 //-------------------------------------------------------------------
@@ -367,18 +379,45 @@ ThingsBoard::~ThingsBoard()
 
 bool ThingsBoard::connect(const std::string &user)
 {
+    std::lock_guard lk(transactionMutex);
+    
     bool result = Mqtt::connect(user);
     if (result)
     {
         // subscribe("v1/devices/me/attributes", [](const Topic& topic, const std::vector<char>& data){
         //         ESP_LOGD(TAG, "topic[%s] data[%s]", topic.get().c_str(), data.data());
         //     });
+        
+        Topic rpcReqTopic(std::string("v1/devices/me/rpc/request/+"));
+        subscribe(rpcReqTopic.get().c_str(), 
+        [this](const Topic& topic, const std::vector<char>& data)
+        {
+            WorkQueue& wq = WorkQueue::get();
+            wq.invoke([this, data, topic]
+            {
+                std::unique_lock uk(rpcMutex);
+                ArduinoJson::JsonDocument doc;
+                ArduinoJson::DeserializationError error = ArduinoJson::deserializeJson(doc, data);
+                std::string method = doc["method"];
+                for(const auto& filter : rpcFilter)
+                {
+                    ESP_LOGD(TAG, "RPC compare rcv{%s} que{%s}", method.c_str(), filter.function.c_str());
+                    if(method.compare(filter.function) == 0)
+                    {
+                        int reqId = std::stoi(topic.strs[topic.strs.size() - 1]);
+                        filter.callback(reqId, doc);
+                    }
+                }
+            });
+        });
     }
     return result;
 }
 
 ArduinoJson::JsonDocument ThingsBoard::request(Topic &&pubTopic, Topic &&subTopic, const ArduinoJson::JsonDocument &data)
 {
+    std::lock_guard lk(transactionMutex);
+
     struct Sync
     {
         std::mutex mutex;
@@ -417,6 +456,8 @@ ArduinoJson::JsonDocument ThingsBoard::request(Topic &&pubTopic, Topic &&subTopi
 
 std::string ThingsBoard::provision(const std::string &deviceName, const std::string &devKey, const std::string &devSec)
 {
+    std::lock_guard lk(transactionMutex);
+
     ESP_LOGI(TAG, "%s", __func__);
     // Connect to the ThingsBoard server as a client wanting to provision a new device
     if (!Mqtt::connect("provision"))
@@ -437,6 +478,8 @@ std::string ThingsBoard::provision(const std::string &deviceName, const std::str
 
 void ThingsBoard::firmwareUpdate()
 {
+    std::lock_guard lk(transactionMutex);
+
     constexpr uint32_t chunkSize = 512;
     ESP_LOGD(TAG, "%s", __func__);
 
@@ -556,6 +599,8 @@ void ThingsBoard::firmwareUpdate()
 
 ArduinoJson::JsonDocument ThingsBoard::requestAttributes(const ArduinoJson::JsonDocument &doc)
 {
+    std::lock_guard lk(transactionMutex);
+
     const int id = attributeReqId++;
     Topic pubTopic(std::string("v1/devices/me/attributes/request/") + std::to_string(id));
     Topic subTopic("v1/devices/me/attributes/response/+");
@@ -566,7 +611,19 @@ ArduinoJson::JsonDocument ThingsBoard::requestAttributes(const ArduinoJson::Json
 
 bool ThingsBoard::sendTelemetry(const ArduinoJson::JsonDocument &doc)
 {
+    std::lock_guard lk(transactionMutex);
+
     std::string json;
     ArduinoJson::serializeJson(doc, json);
     return publish("v1/devices/me/telemetry", json.c_str());
+}
+
+bool ThingsBoard::registerRpcCallback(const std::string& function, RpcCallback&& callback)
+{
+    std::lock_guard lk(transactionMutex);
+
+    std::unique_lock uk(rpcMutex);
+    rpcFilter.emplace_back(RpcFilter(function, std::move(callback)));
+
+    return true;
 }

@@ -3,7 +3,9 @@
 #include <string>
 #include <stdint.h>
 
+#ifndef CURRENT_VERSION
 #define CURRENT_VERSION "0.0.2"
+#endif
 
 class Version
 {

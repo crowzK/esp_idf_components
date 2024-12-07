@@ -73,6 +73,6 @@ bool Version::isHigherVersion() const
 
 Version& Version::getCurrentSWVer()
 {
-    static Version currentVersion(CURRENT_VERSION);
+    static Version currentVersion(CONFIG_SW_VERSION);
     return currentVersion;
 }

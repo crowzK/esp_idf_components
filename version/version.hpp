@@ -3,8 +3,8 @@
 #include <string>
 #include <stdint.h>
 
-#ifndef CURRENT_VERSION
-#define CURRENT_VERSION "0.0.2"
+#ifndef CONFIG_SW_VERSION
+#define CONFIG_SW_VERSION "0.0.0"
 #endif
 
 class Version

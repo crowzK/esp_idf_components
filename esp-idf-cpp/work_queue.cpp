@@ -9,7 +9,8 @@ WorkQueue& WorkQueue::get()
 }
 
 WorkQueue::WorkQueue() :
-    Task(__func__)
+    Task(TAG),
+    workQ(10)
 {
     start();
 } 
@@ -21,28 +22,14 @@ WorkQueue::~WorkQueue()
 
 void WorkQueue::invoke(WorkFunc&& func)
 {
-    std::unique_lock uk(mutex);
-    workQ.emplace_back(std::move(func));
-    uk.unlock();
-    cv.notify_one();
+    workQ.push(std::move(func), std::chrono::seconds(4));
 }
 
 void WorkQueue::task()
 {
     while(1)
     {
-        std::unique_lock uk(mutex);
-        if(not cv.wait_for(uk, std::chrono::seconds(4), 
-            [this]
-            {
-                return workQ.size();
-            }))
-        {
-            continue;;
-        }
-        WorkFunc func = std::move(workQ.front());
-        workQ.pop_front();
-        uk.unlock();
+        WorkFunc func = workQ.front();
         if(func)
         {
             func();

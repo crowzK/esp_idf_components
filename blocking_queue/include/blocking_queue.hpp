@@ -53,6 +53,24 @@ public:
             }
         }
 
+        queue.emplace(data);
+        empty.notify_all();
+        return true;
+    }
+
+    bool push(T&& data, const std::chrono::milliseconds& waitTime)
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+
+        if(queue.size() == capacity)
+        {
+            full.wait_for(lock, waitTime);
+            if(queue.size() == capacity)
+            {
+                return false;
+            }
+        }
+
         queue.emplace(std::move(data));
         empty.notify_all();
         return true;

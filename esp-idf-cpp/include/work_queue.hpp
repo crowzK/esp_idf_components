@@ -5,6 +5,7 @@
 #include <mutex>
 #include <condition_variable>
 #include "task.hpp"
+#include "blocking_queue.hpp"
 
 class WorkQueue : public Task
 {
@@ -15,9 +16,7 @@ public:
     void invoke(WorkFunc&& func);
 
 protected:
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::list<WorkFunc> workQ;
+    BlockingQueue<WorkFunc> workQ;
 
     WorkQueue();
     void task() override;

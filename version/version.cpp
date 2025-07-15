@@ -1,4 +1,5 @@
 #include "version.hpp"
+#include "esp_app_desc.h"
 #include <string.h>
 
 Version::Version(const char* versionStr) :
@@ -8,6 +9,11 @@ Version::Version(const char* versionStr) :
     int index = 0;
     while(*versionStr)
     {
+        if(*versionStr == 'v')
+        {
+            versionStr += 1;
+            continue;
+        }
         if(*versionStr == '.')
         {
             version[index] = std::stoi(ver);
@@ -73,6 +79,7 @@ bool Version::isHigherVersion() const
 
 Version& Version::getCurrentSWVer()
 {
-    static Version currentVersion(CONFIG_SW_VERSION);
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    static Version currentVersion(app_desc->version);
     return currentVersion;
 }

@@ -514,14 +514,19 @@ std::string ThingsBoard::provision(const std::string &deviceName, const std::str
         return std::string();
     }
     ArduinoJson::JsonDocument doc;
+    doc["deviceName"] = deviceName;
     doc["provisionDeviceKey"] = devKey;
     doc["provisionDeviceSecret"] = devSec;
-    doc["deviceName"] = deviceName;
     doc = request(Topic("/provision/request"), Topic("#"), doc);
 
     ESP_LOGI(TAG, "Rcv toekn: %s", std::string(doc["credentialsValue"]).c_str());
     Mqtt::disConnect();
-    return std::string(doc["credentialsValue"]);
+    if(doc["credentialsValue"])
+    {
+        return std::string(doc["credentialsValue"]);
+    }
+    else 
+        return std::string();
 }
 
 void ThingsBoard::firmwareUpdate()
@@ -532,6 +537,12 @@ void ThingsBoard::firmwareUpdate()
     ArduinoJson::JsonDocument doc;
     doc["sharedKeys"] = "fw_checksum,fw_checksum_algorithm,fw_size,fw_title,fw_version";
     doc = requestAttributes(doc);
+
+    if(not doc["shared"])
+    {
+        ESP_LOGI(TAG, "Current version: %s", Version::getCurrentSWVer().get().c_str());
+        return;
+    }
 
     ESP_LOGI(TAG, "fw_title: %s", std::string(doc["shared"]["fw_title"]).c_str());
     ESP_LOGI(TAG, "fw_size: %s", std::string(doc["shared"]["fw_size"]).c_str());

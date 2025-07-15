@@ -3,10 +3,6 @@
 #include <string>
 #include <stdint.h>
 
-#ifndef CONFIG_SW_VERSION
-#define CONFIG_SW_VERSION "0.0.0"
-#endif
-
 class Version
 {
 public:

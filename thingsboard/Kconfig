@@ -1,0 +1,31 @@
+menu "Things Board configuration"
+    config PROJECT_WIFI_SSID
+    string "WiFi SSID"
+    default "MyWiFi"
+    help
+        WiFi network SSID.
+
+    config PROJECT_WIFI_PASSWORD
+        string "WiFi Password"
+        default "MyPassword"
+        help
+            WiFi network password.
+    
+    config PROJECT_MQTT_BROKER_URL
+        string "MQTT Broker URL"
+        default "mqtt://192.168.1.100"
+        help
+            URL of the MQTT broker (e.g., mqtt://192.168.1.100 or mqtts://user:pass@host.domain).
+    
+    config THINGS_BOARD_PROVISION_KEY
+        string "things board provisioning device key"
+        default ""
+        help
+            things board provisioning device key.
+
+    config THINGS_BOARD_PROVISION_SECRET
+        string "things board provisioning device secret"
+        default ""
+        help
+            things board provisioning device secret.
+endmenu

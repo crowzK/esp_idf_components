@@ -1,5 +1,5 @@
 idf_component_register(
-                    SRCS "src/fan_ctrl.cpp"
+                    SRCS "src/fan_controller.cpp"
                     INCLUDE_DIRS "include"
-                    REQUIRES "main"
+                    REQUIRES "driver" "esp_timer"
                     )

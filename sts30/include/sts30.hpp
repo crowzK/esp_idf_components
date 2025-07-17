@@ -1,6 +1,6 @@
 #pragma once
 
-#include "driver/i2c.h"
+#include "i2c_master.hpp" // Use the new I2cMaster class
 
 /**
  * @class Sts30
@@ -10,19 +10,16 @@ class Sts30 {
 public:
     /**
      * @brief Constructor for the STS30 sensor driver.
-     * @param port The I2C port number to use.
+     * @param i2c_master A reference to the I2cMaster object for communication.
      * @param address The I2C address of the sensor (e.g., 0x4A or 0x4B).
      */
-    Sts30(i2c_port_t port = I2C_NUM_0, uint8_t address = 0x4A);
+    Sts30(I2cMaster& i2c_master, uint8_t address = 0x4A);
 
     /**
-     * @brief Initializes the I2C communication for the sensor.
-     * @param sda_pin GPIO number for I2C SDA signal.
-     * @param scl_pin GPIO number for I2C SCL signal.
-     * @param freq_hz I2C clock frequency.
+     * @brief Checks if the sensor is connected and responsive.
      * @return esp_err_t ESP_OK on success, otherwise an error code.
      */
-    esp_err_t begin(gpio_num_t sda_pin, gpio_num_t scl_pin, uint32_t freq_hz = 100000);
+    esp_err_t begin();
 
     /**
      * @brief Reads the temperature from the sensor.
@@ -32,7 +29,7 @@ public:
     esp_err_t read_temperature(float &temperature);
 
 private:
-    i2c_port_t _i2c_port;
+    I2cMaster& _i2c_master; // Store a reference to the I2C master
     uint8_t _address;
 
     /**

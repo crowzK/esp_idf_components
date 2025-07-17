@@ -1,5 +1,5 @@
 idf_component_register(
-                    SRCS "src/sts30.cpp"
+                    SRCS "src/ina3221.cpp"
                     INCLUDE_DIRS "include"
                     REQUIRES "driver" "i2c_master"
                     )

@@ -166,6 +166,6 @@ void FanPidController::update_pid_control() {
     ledc_update_duty(LEDC_LOW_SPEED_MODE, _ledc_channel);
 
     // Change log level to INFO for easier debugging.
-    ESP_LOGI(TAG, "Target: %d, Current: %d, PWM: %d, Error: %.2f, Integral: %.2f", 
+    ESP_LOGD(TAG, "Target: %d, Current: %d, PWM: %d, Error: %.2f, Integral: %.2f", 
              (int)_target_rpm, (int)_current_rpm, (int)_current_pwm_duty, _last_error, _integral_sum);
 }

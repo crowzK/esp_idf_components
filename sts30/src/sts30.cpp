@@ -33,7 +33,7 @@ esp_err_t Sts30::read_temperature(float &temperature)
     esp_err_t err = _i2c_master.write(_address, STS30_CMD_MEAS_HIGH_REP, sizeof(STS30_CMD_MEAS_HIGH_REP));
     if (err != ESP_OK)
     {
-        ESP_LOGE(TAG, "Write measurement command failed: %s", esp_err_to_name(err));
+        ESP_LOGD(TAG, "Write measurement command failed: %s", esp_err_to_name(err));
         return err;
     }
 

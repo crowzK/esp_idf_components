@@ -94,30 +94,6 @@ public:
         return true;
     }
 
-    T front()
-    {
-        std::unique_lock<std::mutex> lock(mutex);
-        while(queue.empty())
-        {
-            empty.wait(lock );
-        }
-
-        T front(std::move(queue.front()));
-        return front;
-    }
-
-    T back()
-    {
-        std::unique_lock<std::mutex> lock(mutex);
-        while(queue.empty())
-        {
-            empty.wait(lock );
-        }
-
-        T back(queue.back());
-        return back;
-    }
-
     size_t size()
     {
         std::lock_guard<std::mutex> lock(mutex);

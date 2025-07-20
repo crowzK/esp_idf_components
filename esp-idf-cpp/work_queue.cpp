@@ -29,7 +29,11 @@ void WorkQueue::task()
 {
     while(1)
     {
-        WorkFunc func = workQ.front();
+        WorkFunc func;
+        if(not workQ.pop(func, std::chrono::seconds(4)))
+        {
+            continue;
+        }
         if(func)
         {
             func();

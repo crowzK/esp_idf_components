@@ -2,63 +2,71 @@
 
 #include "driver/ledc.h"
 #include "driver/pulse_cnt.h"
-#include "esp_timer.h" // Add this for esp_timer
-#include "freertos/FreeRTOS.h"
+#include "esp_timer.h"
 
-class FanController {
+/**
+ * @class FanPidController
+ * @brief A fan controller that uses a PID loop to maintain a target RPM.
+ */
+class FanPidController {
 public:
     /**
-     * @brief FanController constructor
-     *
-     * @param pwm_pin GPIO pin for fan PWM control
-     * @param tacho_pin GPIO pin for fan tachometer (RPM)
-     * @param ledc_timer LEDC timer to use
-     * @param ledc_channel LEDC channel to use
-     * @param pcnt_unit PCNT unit to use (pass a non-NULL handle if already initialized)
+     * @brief Constructor for the PID Fan Controller.
+     * @param pwm_pin GPIO for PWM output.
+     * @param tacho_pin GPIO for tachometer input.
+     * @param ledc_timer LEDC timer to use.
+     * @param ledc_channel LEDC channel to use.
      */
-    FanController(gpio_num_t pwm_pin, gpio_num_t tacho_pin, ledc_timer_t ledc_timer,
-                  ledc_channel_t ledc_channel, pcnt_unit_handle_t pcnt_unit = nullptr);
-
-    ~FanController();
+    FanPidController(gpio_num_t pwm_pin, gpio_num_t tacho_pin, ledc_timer_t ledc_timer, ledc_channel_t ledc_channel);
+    ~FanPidController();
 
     /**
-     * @brief Initializes the fan driver and starts the RPM measurement timer.
+     * @brief Initializes the hardware and starts the control loops.
      */
     void begin();
 
     /**
-     * @brief Sets the fan speed as a percentage (0-100).
-     * @param percentage The desired speed percentage.
+     * @brief Sets the desired target speed in RPM.
+     * @param rpm The target RPM.
      */
-    void set_speed(uint8_t percentage);
+    void set_target_rpm(int rpm);
 
     /**
-     * @brief Returns the last measured RPM value.
-     * @return int The fan's RPM.
+     * @brief Gets the current measured RPM.
+     * @return The current RPM.
      */
-    int get_rpm() const;
+    int get_current_rpm() const;
+
+    /**
+     * @brief Gets the current PWM duty cycle (0-1023).
+     * @return The current PWM duty value.
+     */
+    int get_current_pwm_duty() const;
 
 private:
-    // GPIO pins
+    // Hardware Configuration
     gpio_num_t _pwm_pin;
     gpio_num_t _tacho_pin;
-
-    // LEDC configuration
     ledc_timer_t _ledc_timer;
     ledc_channel_t _ledc_channel;
 
-    // PCNT configuration
+    // RPM Measurement
     pcnt_unit_handle_t _pcnt_unit;
+    esp_timer_handle_t _rpm_measure_timer;
+    volatile int _current_rpm;
 
-    // RPM
-    volatile int _rpm;
-
-    // esp_timer handle
-    esp_timer_handle_t _rpm_timer_handle;
+    // PID Control
+    esp_timer_handle_t _pid_control_timer;
+    volatile int _target_rpm;
+    volatile int _current_pwm_duty; // Range: 0-1023
+    double _kp, _ki, _kd;
+    double _integral_sum;
+    double _last_error;
 
     void init_pwm();
     void init_rpm_counter();
 
-    // Static timer callback function for RPM measurement.
-    static void rpm_timer_callback(void *arg);
+    static void rpm_measure_callback(void* arg);
+    static void pid_control_callback(void* arg);
+    void update_pid_control();
 };
